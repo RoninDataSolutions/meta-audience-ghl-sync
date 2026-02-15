@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  ghl-meta-sync:
+    build: .
+    container_name: ghl-meta-sync
+    ports:
+      - "9876:9876"
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - unraid-network
+
+networks:
+  unraid-network:
+    external: true

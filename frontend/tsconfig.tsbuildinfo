@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/configpanel.tsx","./src/components/emailsettings.tsx","./src/components/header.tsx","./src/components/statuspanel.tsx","./src/components/syncdetailmodal.tsx","./src/components/synchistory.tsx","./src/components/valuechart.tsx"],"version":"5.7.3"}

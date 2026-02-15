@@ -1,0 +1,1 @@
+I have {count} customers with LTV values ranging from ${min_val} to ${max_val}. Here are the LTV values: {values}. Calculate the percentile rank (0-100) for each value where 100 = highest value, 0 = lowest value. Return ONLY a JSON array of percentile integers in the same order as input, no explanation.
