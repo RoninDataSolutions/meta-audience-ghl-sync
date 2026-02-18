@@ -37,11 +37,10 @@ def hash_field(value: str | None) -> str:
     return _sha256(value)
 
 
-def prepare_contact_row(
-    contact: dict, normalized_value: int
-) -> list:
+def prepare_contact_row(contact: dict, normalized_value: int) -> list:
     """Prepare a single contact row for Meta upload.
-    Schema: [EMAIL, PHONE, FN, LN, CT, ST, ZIP, COUNTRY, VALUE]
+    Schema: [EMAIL, PHONE, FN, LN, CT, ST, ZIP, COUNTRY, LOOKALIKE_VALUE]
+    LOOKALIKE_VALUE is the LTV percentile (0-100), not hashed.
     """
     return [
         hash_email(contact.get("email")),

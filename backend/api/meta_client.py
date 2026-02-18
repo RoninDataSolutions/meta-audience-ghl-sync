@@ -25,6 +25,8 @@ async def _request(method: str, url: str, **kwargs) -> dict:
                     logger.warning(f"Meta rate limited, retrying in {delay}s (attempt {attempt + 1})")
                     await asyncio.sleep(delay)
                     continue
+                if resp.status_code >= 400:
+                    logger.error(f"Meta API error {resp.status_code}: {resp.text}")
                 resp.raise_for_status()
                 return resp.json()
         except httpx.HTTPStatusError:
@@ -54,11 +56,23 @@ async def create_custom_audience(name: str, description: str) -> dict:
             "subtype": "CUSTOM",
             "description": description,
             "customer_file_source": "USER_PROVIDED_ONLY",
+            "is_value_based": True,
         },
     )
     audience_id = result.get("id")
     logger.info(f"Created Meta Custom Audience: {name} (ID: {audience_id})")
     return {"id": audience_id, "name": name}
+
+
+async def delete_all_users(audience_id: str) -> None:
+    """Remove all users from an audience so it can be repopulated."""
+    result = await _request(
+        "delete",
+        f"{BASE_URL}/{audience_id}/users",
+        params={"access_token": settings.META_ACCESS_TOKEN},
+        json={"payload": {"schema": ["EMAIL"], "data": []}},
+    )
+    logger.info(f"Cleared audience {audience_id}: {result}")
 
 
 async def upload_users(audience_id: str, schema: list[str], data: list[list[Any]]) -> dict:
@@ -111,9 +125,9 @@ async def create_lookalike_audience(
             "subtype": "LOOKALIKE",
             "origin_audience_id": origin_audience_id,
             "lookalike_spec": {
+                "type": "custom_ratio",
                 "ratio": 0.01,
                 "country": "US",
-                "type": "similarity",
             },
         },
     )

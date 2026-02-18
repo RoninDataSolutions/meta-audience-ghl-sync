@@ -21,14 +21,21 @@ def _send_email(subject: str, html_body: str):
     msg.attach(MIMEText(html_body, "html"))
 
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-            server.ehlo()
-            if settings.SMTP_PORT != 25:
+        if settings.SMTP_PORT == 465:
+            # SSL from the start (e.g. Zoho, some Gmail configs)
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as server:
+                if settings.SMTP_USERNAME:
+                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                server.sendmail(settings.SMTP_FROM_EMAIL, settings.SMTP_TO_EMAIL, msg.as_string())
+        else:
+            # STARTTLS (port 587 default)
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as server:
+                server.ehlo()
                 server.starttls()
                 server.ehlo()
-            if settings.SMTP_USERNAME:
-                server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            server.sendmail(settings.SMTP_FROM_EMAIL, settings.SMTP_TO_EMAIL, msg.as_string())
+                if settings.SMTP_USERNAME:
+                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                server.sendmail(settings.SMTP_FROM_EMAIL, settings.SMTP_TO_EMAIL, msg.as_string())
         logger.info(f"Email sent: {subject}")
     except Exception as e:
         logger.error(f"Failed to send email: {e}")

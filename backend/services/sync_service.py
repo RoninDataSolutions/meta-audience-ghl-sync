@@ -50,18 +50,24 @@ async def run_sync(config_id: int, db: Session) -> None:
 
         # Step 2: Extract LTV values, filter to contacts with valid LTV
         logger.info("Step 2: Extracting LTV values...")
-        ltv_field = config.ghl_ltv_field_key
-        # Debug: log the first contact's custom fields structure
-        if contacts:
-            sample = contacts[0]
-            logger.debug(f"Sample contact keys: {list(sample.keys())}")
-            logger.debug(f"Sample customField (v1): {sample.get('customField')}")
-            logger.debug(f"Sample customFields (v2): {sample.get('customFields')}")
-            logger.info(f"Looking for LTV field key: '{ltv_field}'")
+        # GHL v2 contacts store custom fields by UUID id, not fieldKey.
+        # Resolve the configured fieldKey (e.g. "contact.ltv") to its UUID.
+        custom_fields = await ghl_client.get_custom_fields()
+        ltv_field_uuid = None
+        for cf in custom_fields:
+            if cf.get("fieldKey") == config.ghl_ltv_field_key or cf.get("id") == config.ghl_ltv_field_key:
+                ltv_field_uuid = cf.get("id")
+                break
+        if not ltv_field_uuid:
+            raise ValueError(
+                f"Could not resolve LTV field '{config.ghl_ltv_field_key}' to a GHL custom field ID. "
+                f"Available fields: {[f.get('fieldKey') for f in custom_fields]}"
+            )
+        logger.info(f"Resolved LTV field '{config.ghl_ltv_field_key}' → UUID '{ltv_field_uuid}'")
         ltv_values = []
         valid_contacts = []
         for c in contacts:
-            raw_ltv = _extract_ltv(c, ltv_field)
+            raw_ltv = _extract_ltv(c, ltv_field_uuid)
             if raw_ltv is not None and raw_ltv > 0:
                 ltv_values.append(raw_ltv)
                 valid_contacts.append(c)
@@ -89,32 +95,51 @@ async def run_sync(config_id: int, db: Session) -> None:
 
         # Step 4: Hash PII and prepare rows
         logger.info("Step 4: Preparing contact data (hashing PII)...")
-        schema = ["EMAIL", "PHONE", "FN", "LN", "CT", "ST", "ZIP", "COUNTRY", "VALUE"]
+        schema = ["EMAIL", "PHONE", "FN", "LN", "CT", "ST", "ZIP", "COUNTRY", "LOOKALIKE_VALUE"]
         rows = [
             prepare_contact_row(contact, pct)
             for contact, pct in zip(valid_contacts, percentiles)
         ]
 
-        # Step 5: Create Meta Custom Audience
+        # Step 5: Get or create Meta Custom Audience
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        audience_name = f"GHL-HighValue-{today}"
-        logger.info(f"Step 5: Creating Meta Custom Audience: {audience_name}")
-        audience = await meta_client.create_custom_audience(
-            name=audience_name,
-            description=f"Synced from GHL on {today}",
+        audience_name = "GHL-HighValue"
+
+        # Reuse existing audience from last successful run if available
+        last_success = (
+            db.query(SyncRun)
+            .filter(SyncRun.config_id == config_id, SyncRun.meta_audience_id.isnot(None))
+            .order_by(SyncRun.id.desc())
+            .first()
         )
+
+        if last_success and last_success.meta_audience_id:
+            logger.info(f"Step 5: Reusing existing Meta Audience ID {last_success.meta_audience_id}, clearing old users...")
+            await meta_client.delete_all_users(last_success.meta_audience_id)
+            audience = {"id": last_success.meta_audience_id, "name": audience_name}
+        else:
+            logger.info(f"Step 5: Creating new Meta Custom Audience: {audience_name}")
+            audience = await meta_client.create_custom_audience(
+                name=audience_name,
+                description=f"GHL high-value contacts synced via LTV normalization",
+            )
 
         # Step 6: Upload contacts in batches
         logger.info("Step 6: Uploading contacts to Meta...")
         upload_result = await meta_client.upload_users(audience["id"], schema, rows)
 
-        # Step 7: Create Lookalike Audience
+        # Step 7: Get or create Lookalike Audience
         lookalike_name = f"{audience_name}-LAL-1%"
-        logger.info(f"Step 7: Creating Lookalike Audience: {lookalike_name}")
-        lookalike = await meta_client.create_lookalike_audience(
-            origin_audience_id=audience["id"],
-            name=lookalike_name,
-        )
+        last_lookalike_id = last_success.meta_lookalike_id if last_success else None
+        if last_lookalike_id:
+            logger.info(f"Step 7: Reusing existing Lookalike Audience ID {last_lookalike_id}")
+            lookalike = {"id": last_lookalike_id, "name": lookalike_name}
+        else:
+            logger.info(f"Step 7: Creating Lookalike Audience: {lookalike_name}")
+            lookalike = await meta_client.create_lookalike_audience(
+                origin_audience_id=audience["id"],
+                name=lookalike_name,
+            )
 
         # Step 8: Update sync run record
         run.status = SyncStatus.SUCCESS
@@ -170,26 +195,12 @@ async def run_sync(config_id: int, db: Session) -> None:
         _running_sync_id = None
 
 
-def _extract_ltv(contact: dict, field_key: str) -> float | None:
-    """Extract LTV value from contact's custom fields."""
-    # Check customField dict (v1 format)
-    custom_fields = contact.get("customField", {})
-    if isinstance(custom_fields, dict):
-        val = custom_fields.get(field_key)
-        if val is not None:
+def _extract_ltv(contact: dict, field_uuid: str) -> float | None:
+    """Extract LTV value from contact's customFields list by UUID."""
+    for cf in contact.get("customFields", []):
+        if cf.get("id") == field_uuid:
             try:
-                return float(val)
+                return float(cf.get("value") or 0)
             except (ValueError, TypeError):
                 return None
-
-    # Check customFields list format (v2 format)
-    custom_fields_list = contact.get("customFields", [])
-    if isinstance(custom_fields_list, list):
-        for cf in custom_fields_list:
-            if cf.get("id") == field_key or cf.get("fieldKey") == field_key:
-                try:
-                    return float(cf.get("value", 0))
-                except (ValueError, TypeError):
-                    return None
-
     return None
