@@ -48,7 +48,7 @@ async def run_sync(config_id: int, db: Session) -> None:
         if not contacts:
             raise ValueError("No contacts found in GHL location")
 
-        # Step 2: Extract LTV values, filter to contacts with valid LTV
+        # Step 2: Extract LTV values — contacts without LTV default to 0
         logger.info("Step 2: Extracting LTV values...")
         # GHL v2 contacts store custom fields by UUID id, not fieldKey.
         # Resolve the configured fieldKey (e.g. "contact.ltv") to its UUID.
@@ -65,29 +65,19 @@ async def run_sync(config_id: int, db: Session) -> None:
             )
         logger.info(f"Resolved LTV field '{config.ghl_ltv_field_key}' → UUID '{ltv_field_uuid}'")
         ltv_values = []
-        valid_contacts = []
         for c in contacts:
-            raw_ltv = _extract_ltv(c, ltv_field_uuid)
-            if raw_ltv is not None and raw_ltv > 0:
-                ltv_values.append(raw_ltv)
-                valid_contacts.append(c)
+            ltv_values.append(_extract_ltv(c, ltv_field_uuid) or 0.0)
 
-        if not ltv_values:
+        nonzero_count = sum(1 for v in ltv_values if v > 0)
+        logger.info(f"{nonzero_count}/{len(contacts)} contacts have non-zero LTV values; remainder will be uploaded with LTV=0")
+        if nonzero_count == 0:
             logger.warning(
-                f"No contacts with valid LTV values found in field '{config.ghl_ltv_field_name}'. "
-                f"Total contacts fetched: {len(contacts)}. Stopping sync early."
+                f"No contacts have non-zero LTV in field '{config.ghl_ltv_field_name}'. "
+                f"All {len(contacts)} contacts will be uploaded with LTV=0."
             )
-            run.status = SyncStatus.WARNING
-            run.completed_at = datetime.now(timezone.utc)
-            run.contacts_processed = 0
-            run.contacts_matched = 0
-            run.error_message = f"No LTV values found in field '{config.ghl_ltv_field_name}' across {len(contacts)} contacts"
-            db.commit()
-            return
 
-        run.contacts_processed = len(valid_contacts)
+        run.contacts_processed = len(contacts)
         db.commit()
-        logger.info(f"Found {len(valid_contacts)} contacts with LTV values (out of {len(contacts)} total)")
 
         # Step 3: Normalize via Claude
         logger.info("Step 3: Normalizing LTV values via Claude API...")
@@ -98,11 +88,10 @@ async def run_sync(config_id: int, db: Session) -> None:
         schema = ["EMAIL", "PHONE", "FN", "LN", "CT", "ST", "ZIP", "COUNTRY", "LOOKALIKE_VALUE"]
         rows = [
             prepare_contact_row(contact, pct)
-            for contact, pct in zip(valid_contacts, percentiles)
+            for contact, pct in zip(contacts, percentiles)
         ]
 
         # Step 5: Get or create Meta Custom Audience
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         audience_name = "GHL-HighValue"
 
         # Reuse existing audience from last successful run if available
@@ -144,7 +133,7 @@ async def run_sync(config_id: int, db: Session) -> None:
         # Step 8: Update sync run record
         run.status = SyncStatus.SUCCESS
         run.completed_at = datetime.now(timezone.utc)
-        run.contacts_processed = len(valid_contacts)
+        run.contacts_processed = len(contacts)
         run.contacts_matched = upload_result.get("num_received", 0)
         run.meta_audience_id = audience["id"]
         run.meta_audience_name = audience["name"]
@@ -155,7 +144,7 @@ async def run_sync(config_id: int, db: Session) -> None:
 
         # Step 9: Store contact details
         logger.info("Step 9: Storing contact details...")
-        for contact, raw_ltv, pct in zip(valid_contacts, ltv_values, percentiles):
+        for contact, raw_ltv, pct in zip(contacts, ltv_values, percentiles):
             sc = SyncContact(
                 sync_run_id=run.id,
                 ghl_contact_id=contact.get("id", ""),
