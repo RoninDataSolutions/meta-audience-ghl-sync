@@ -19,7 +19,7 @@ async def _request(method: str, url: str, **kwargs) -> dict:
     for attempt in range(MAX_RETRIES):
         try:
             async with httpx.AsyncClient(timeout=120) as client:
-                resp = await getattr(client, method)(url, **kwargs)
+                resp = await client.request(method.upper(), url, **kwargs)
                 if resp.status_code == 429:
                     delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                     logger.warning(f"Meta rate limited, retrying in {delay}s (attempt {attempt + 1})")
