@@ -94,8 +94,7 @@ async def run_sync(config_id: int, db: Session) -> None:
         )
 
         if last_success and last_success.meta_audience_id:
-            logger.info(f"Step 5: Reusing existing Meta Audience ID {last_success.meta_audience_id}, clearing old users...")
-            await meta_client.delete_all_users(last_success.meta_audience_id)
+            logger.info(f"Step 5: Reusing existing Meta Audience ID {last_success.meta_audience_id} (session upload will replace contents)")
             audience = {"id": last_success.meta_audience_id, "name": audience_name}
         else:
             logger.info(f"Step 5: Creating new Meta Custom Audience: {audience_name}")

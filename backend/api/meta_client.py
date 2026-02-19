@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 from typing import Any
 
 import httpx
@@ -64,26 +65,22 @@ async def create_custom_audience(name: str, description: str) -> dict:
     return {"id": audience_id, "name": name}
 
 
-async def delete_all_users(audience_id: str) -> None:
-    """Remove all users from an audience so it can be repopulated."""
-    result = await _request(
-        "delete",
-        f"{BASE_URL}/{audience_id}/users",
-        params={"access_token": settings.META_ACCESS_TOKEN},
-        json={"payload": {"schema": ["EMAIL"], "data": []}},
-    )
-    logger.info(f"Cleared audience {audience_id}: {result}")
-
-
 async def upload_users(audience_id: str, schema: list[str], data: list[list[Any]]) -> dict:
-    """Upload users to audience in batches of 10k. Returns aggregate stats."""
+    """Upload users to audience in batches of 10k using session-based replace.
+
+    Using a session with last_batch_flag=True on the final batch tells Meta to
+    replace the entire audience contents rather than append to existing members.
+    This eliminates the need for a separate delete step.
+    """
     total_received = 0
     total_invalid = 0
+    total_batches = max((len(data) + BATCH_SIZE - 1) // BATCH_SIZE, 1)
+    session_id = random.randint(1, 2**32)
 
-    for i in range(0, len(data), BATCH_SIZE):
+    for i in range(0, max(len(data), 1), BATCH_SIZE):
         batch = data[i:i + BATCH_SIZE]
         batch_num = (i // BATCH_SIZE) + 1
-        total_batches = (len(data) + BATCH_SIZE - 1) // BATCH_SIZE
+        is_last = batch_num == total_batches
         logger.info(f"Uploading batch {batch_num}/{total_batches} ({len(batch)} contacts)")
 
         result = await _request(
@@ -94,7 +91,13 @@ async def upload_users(audience_id: str, schema: list[str], data: list[list[Any]
                 "payload": {
                     "schema": schema,
                     "data": batch,
-                }
+                },
+                "session": {
+                    "session_id": session_id,
+                    "batch_seq": batch_num,
+                    "last_batch_flag": is_last,
+                    "estimated_num_total": len(data),
+                },
             },
         )
 
