@@ -53,16 +53,7 @@ async def run_sync(config_id: int, db: Session) -> None:
         # GHL v2 contacts store custom fields by UUID id, not fieldKey.
         # Resolve the configured fieldKey (e.g. "contact.ltv") to its UUID.
         custom_fields = await ghl_client.get_custom_fields()
-        ltv_field_uuid = None
-        for cf in custom_fields:
-            if cf.get("fieldKey") == config.ghl_ltv_field_key or cf.get("id") == config.ghl_ltv_field_key:
-                ltv_field_uuid = cf.get("id")
-                break
-        if not ltv_field_uuid:
-            raise ValueError(
-                f"Could not resolve LTV field '{config.ghl_ltv_field_key}' to a GHL custom field ID. "
-                f"Available fields: {[f.get('fieldKey') for f in custom_fields]}"
-            )
+        ltv_field_uuid = _resolve_ltv_field_uuid(custom_fields, config.ghl_ltv_field_key)
         logger.info(f"Resolved LTV field '{config.ghl_ltv_field_key}' → UUID '{ltv_field_uuid}'")
         ltv_values = []
         for c in contacts:
@@ -182,6 +173,23 @@ async def run_sync(config_id: int, db: Session) -> None:
 
     finally:
         _running_sync_id = None
+
+
+def _resolve_ltv_field_uuid(custom_fields: list[dict], field_key: str) -> str:
+    """Resolve a GHL fieldKey or UUID to the field's UUID.
+
+    Raises ValueError if the field is not found — meaning the LTV custom field
+    configured in settings does not exist in the GHL location.
+    """
+    for cf in custom_fields:
+        if cf.get("fieldKey") == field_key or cf.get("id") == field_key:
+            uuid = cf.get("id")
+            if uuid:
+                return uuid
+    raise ValueError(
+        f"LTV custom field '{field_key}' not found in GHL location. "
+        f"Available fields: {[f.get('fieldKey') for f in custom_fields]}"
+    )
 
 
 def _extract_ltv(contact: dict, field_uuid: str) -> float | None:
