@@ -93,14 +93,17 @@ async def run_sync(config_id: int, db: Session) -> None:
             .first()
         )
 
-        if last_success and last_success.meta_audience_id:
+        if last_success and last_success.meta_audience_id and await meta_client.audience_exists(last_success.meta_audience_id):
             logger.info(f"Step 5: Reusing existing Meta Audience ID {last_success.meta_audience_id} (session upload will replace contents)")
             audience = {"id": last_success.meta_audience_id, "name": audience_name}
         else:
-            logger.info(f"Step 5: Creating new Meta Custom Audience: {audience_name}")
+            if last_success and last_success.meta_audience_id:
+                logger.warning(f"Step 5: Audience {last_success.meta_audience_id} no longer exists in Meta, creating new one")
+            else:
+                logger.info(f"Step 5: Creating new Meta Custom Audience: {audience_name}")
             audience = await meta_client.create_custom_audience(
                 name=audience_name,
-                description=f"GHL high-value contacts synced via LTV normalization",
+                description="GHL high-value contacts synced via LTV normalization",
             )
 
         # Step 6: Upload contacts in batches
@@ -110,11 +113,14 @@ async def run_sync(config_id: int, db: Session) -> None:
         # Step 7: Get or create Lookalike Audience
         lookalike_name = f"{audience_name}-LAL-1%"
         last_lookalike_id = last_success.meta_lookalike_id if last_success else None
-        if last_lookalike_id:
+        if last_lookalike_id and await meta_client.audience_exists(last_lookalike_id):
             logger.info(f"Step 7: Reusing existing Lookalike Audience ID {last_lookalike_id}")
             lookalike = {"id": last_lookalike_id, "name": lookalike_name}
         else:
-            logger.info(f"Step 7: Creating Lookalike Audience: {lookalike_name}")
+            if last_lookalike_id:
+                logger.warning(f"Step 7: Lookalike {last_lookalike_id} no longer exists in Meta, creating new one")
+            else:
+                logger.info(f"Step 7: Creating Lookalike Audience: {lookalike_name}")
             lookalike = await meta_client.create_lookalike_audience(
                 origin_audience_id=audience["id"],
                 name=lookalike_name,

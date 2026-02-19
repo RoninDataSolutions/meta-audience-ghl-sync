@@ -42,6 +42,21 @@ async def _request(method: str, url: str, **kwargs) -> dict:
     raise RuntimeError("Max retries exceeded for Meta API request")
 
 
+async def audience_exists(audience_id: str) -> bool:
+    """Return True if the audience ID is still valid in Meta, False if deleted."""
+    try:
+        await _request(
+            "get",
+            f"{BASE_URL}/{audience_id}",
+            params={"access_token": settings.META_ACCESS_TOKEN, "fields": "id"},
+        )
+        return True
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (400, 404):
+            return False
+        raise
+
+
 async def create_custom_audience(name: str, description: str) -> dict:
     """Create a new Custom Audience and return {id, name}."""
     ad_account = settings.META_AD_ACCOUNT_ID
