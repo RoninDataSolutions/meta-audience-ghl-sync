@@ -44,9 +44,15 @@ async def run_sync(config_id: int, db: Session) -> None:
 
         # Step 1: Fetch all contacts from GHL
         logger.info("Step 1: Fetching all contacts from GHL...")
-        contacts = await ghl_client.get_all_contacts()
-        if not contacts:
+        all_contacts = await ghl_client.get_all_contacts()
+        if not all_contacts:
             raise ValueError("No contacts found in GHL location")
+
+        # Filter to contacts Meta can actually match (needs email or phone)
+        contacts = [c for c in all_contacts if c.get("email") or c.get("phone")]
+        skipped = len(all_contacts) - len(contacts)
+        if skipped:
+            logger.info(f"Skipped {skipped} contacts with no email or phone (unidentifiable by Meta)")
 
         # Step 2: Extract LTV values — contacts without LTV default to 0
         logger.info("Step 2: Extracting LTV values...")
