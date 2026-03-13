@@ -62,18 +62,26 @@ def normalize_ltv_values(ltv_values: list[float]) -> list[int]:
             values=json.dumps(chunk),
         )
 
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        percentiles = None
+        for attempt in range(3):
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            response_text = message.content[0].text
+            parsed = _parse_json_array(response_text)
+            if len(parsed) == len(chunk):
+                percentiles = parsed
+                break
+            logger.warning(
+                f"Claude returned {len(parsed)} values, expected {len(chunk)} "
+                f"(attempt {attempt + 1}/3) — retrying"
+            )
 
-        response_text = message.content[0].text
-        percentiles = _parse_json_array(response_text)
-
-        if len(percentiles) != len(chunk):
+        if percentiles is None:
             raise ValueError(
-                f"Claude returned {len(percentiles)} values but expected {len(chunk)}"
+                f"Claude repeatedly returned wrong count for chunk of {len(chunk)} values"
             )
 
         # Clamp to 0-100
