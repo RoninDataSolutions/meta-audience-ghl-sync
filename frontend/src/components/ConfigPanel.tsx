@@ -11,6 +11,8 @@ export default function ConfigPanel({ config, onSaved }: Props) {
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [selectedFieldKey, setSelectedFieldKey] = useState("");
   const [selectedFieldName, setSelectedFieldName] = useState("");
+  const [metaAudienceId, setMetaAudienceId] = useState("");
+  const [metaLookalikeId, setMetaLookalikeId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,6 +24,8 @@ export default function ConfigPanel({ config, onSaved }: Props) {
         if (config) {
           setSelectedFieldKey(config.ghl_ltv_field_key);
           setSelectedFieldName(config.ghl_ltv_field_name);
+          setMetaAudienceId(config.meta_audience_id || "");
+          setMetaLookalikeId(config.meta_lookalike_id || "");
         }
       })
       .catch((e) => setError(e.message))
@@ -36,6 +40,8 @@ export default function ConfigPanel({ config, onSaved }: Props) {
       await saveConfig({
         ghl_ltv_field_key: selectedFieldKey,
         ghl_ltv_field_name: selectedFieldName,
+        meta_audience_id: metaAudienceId || undefined,
+        meta_lookalike_id: metaLookalikeId || undefined,
       });
       onSaved();
     } catch (e: any) {
@@ -70,6 +76,24 @@ export default function ConfigPanel({ config, onSaved }: Props) {
             </option>
           ))}
         </select>
+      </div>
+      <div className="form-group">
+        <label>Meta Custom Audience ID <span className="muted">(optional — paste existing ID to reuse)</span></label>
+        <input
+          type="text"
+          value={metaAudienceId}
+          onChange={(e) => setMetaAudienceId(e.target.value)}
+          placeholder="e.g. 6911411578885"
+        />
+      </div>
+      <div className="form-group">
+        <label>Meta Lookalike Audience ID <span className="muted">(optional)</span></label>
+        <input
+          type="text"
+          value={metaLookalikeId}
+          onChange={(e) => setMetaLookalikeId(e.target.value)}
+          placeholder="e.g. 6911411578886"
+        />
       </div>
       <p className="muted">
         All contacts with a non-empty value in this field will be synced.

@@ -40,6 +40,8 @@ export async function getConfig(): Promise<{
 export async function saveConfig(payload: {
   ghl_ltv_field_key: string;
   ghl_ltv_field_name: string;
+  meta_audience_id?: string;
+  meta_lookalike_id?: string;
 }): Promise<{ config: SyncConfig }> {
   return request("/api/config", {
     method: "POST",

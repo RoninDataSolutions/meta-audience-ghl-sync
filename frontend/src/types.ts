@@ -3,6 +3,8 @@ export interface SyncConfig {
   ghl_ltv_field_key: string;
   ghl_ltv_field_name: string;
   meta_ad_account_id: string;
+  meta_audience_id: string | null;
+  meta_lookalike_id: string | null;
   sync_enabled: boolean;
 }
 

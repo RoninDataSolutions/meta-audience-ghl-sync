@@ -13,6 +13,8 @@ router = APIRouter()
 class ConfigPayload(BaseModel):
     ghl_ltv_field_key: str
     ghl_ltv_field_name: str
+    meta_audience_id: str | None = None
+    meta_lookalike_id: str | None = None
 
 
 class ConfigResponse(BaseModel):
@@ -20,6 +22,8 @@ class ConfigResponse(BaseModel):
     ghl_ltv_field_key: str
     ghl_ltv_field_name: str
     meta_ad_account_id: str
+    meta_audience_id: str | None
+    meta_lookalike_id: str | None
     sync_enabled: bool
 
     class Config:
@@ -62,11 +66,15 @@ def save_config(payload: ConfigPayload, db: Session = Depends(get_db)):
         config.ghl_ltv_field_key = payload.ghl_ltv_field_key
         config.ghl_ltv_field_name = payload.ghl_ltv_field_name
         config.meta_ad_account_id = settings.META_AD_ACCOUNT_ID
+        config.meta_audience_id = payload.meta_audience_id or None
+        config.meta_lookalike_id = payload.meta_lookalike_id or None
     else:
         config = SyncConfig(
             ghl_ltv_field_key=payload.ghl_ltv_field_key,
             ghl_ltv_field_name=payload.ghl_ltv_field_name,
             meta_ad_account_id=settings.META_AD_ACCOUNT_ID,
+            meta_audience_id=payload.meta_audience_id or None,
+            meta_lookalike_id=payload.meta_lookalike_id or None,
             sync_enabled=True,
         )
         db.add(config)

@@ -21,6 +21,8 @@ class SyncConfig(Base):
     ghl_ltv_field_key = Column(String, nullable=False)
     ghl_ltv_field_name = Column(String, nullable=False)
     meta_ad_account_id = Column(String, nullable=False)
+    meta_audience_id = Column(String, nullable=True)
+    meta_lookalike_id = Column(String, nullable=True)
     sync_enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
