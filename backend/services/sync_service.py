@@ -61,17 +61,13 @@ async def run_sync(config_id: int, db: Session) -> None:
         custom_fields = await ghl_client.get_custom_fields()
         ltv_field_uuid = _resolve_ltv_field_uuid(custom_fields, config.ghl_ltv_field_key)
         logger.info(f"Resolved LTV field '{config.ghl_ltv_field_key}' → UUID '{ltv_field_uuid}'")
+
         ltv_values = []
         for c in contacts:
             ltv_values.append(_extract_ltv(c, ltv_field_uuid) or 0.0)
 
         nonzero_count = sum(1 for v in ltv_values if v > 0)
-        logger.info(f"{nonzero_count}/{len(contacts)} contacts have non-zero LTV values; remainder will be uploaded with LTV=0")
-        if nonzero_count == 0:
-            logger.warning(
-                f"No contacts have non-zero LTV in field '{config.ghl_ltv_field_name}'. "
-                f"All {len(contacts)} contacts will be uploaded with LTV=0."
-            )
+        logger.info(f"{nonzero_count}/{len(contacts)} contacts have non-zero LTV values; remainder uploaded with LTV=0")
 
         run.contacts_processed = len(contacts)
         db.commit()

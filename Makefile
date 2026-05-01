@@ -3,6 +3,7 @@
 # ── Local Docker deployment (permanent) ──────────────────────────────────────
 
 up: ## Start postgres + app in Docker (detached)
+	-docker rm -f ghl-meta-postgres ghl-meta-sync 2>/dev/null
 	docker compose -f docker-compose.local.yml up -d --build
 
 down: ## Stop and remove containers

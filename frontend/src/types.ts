@@ -66,3 +66,59 @@ export interface SyncHistory {
   per_page: number;
   total_pages: number;
 }
+
+// ── Audit ──────────────────────────────────────────────────────────────────
+
+export interface AdAccount {
+  id: number;
+  account_id: string;
+  account_name: string;
+  has_custom_token: boolean;
+  notification_email: string | null;
+  audit_cron: string | null;
+  is_active: boolean;
+  last_audit_at: string | null;
+  currency: string | null;
+  timezone_name: string | null;
+  created_at: string | null;
+}
+
+export interface AuditDelta {
+  previous: number;
+  current: number;
+  change_pct: number;
+}
+
+export interface AuditReport {
+  id: number;
+  account_id: string;
+  account_name?: string;
+  generated_at: string | null;
+  status: "in_progress" | "completed" | "failed";
+  total_spend_7d: number | null;
+  total_spend_30d: number | null;
+  total_conversions_7d: number | null;
+  total_conversions_30d: number | null;
+  total_impressions_7d: number | null;
+  total_impressions_30d: number | null;
+  total_clicks_7d: number | null;
+  total_clicks_30d: number | null;
+  avg_cpa_30d: number | null;
+  avg_ctr_30d: number | null;
+  avg_roas_30d: number | null;
+  campaign_count: number | null;
+  audience_count: number | null;
+  models_used: string | null;
+  has_pdf: boolean;
+  error_message: string | null;
+}
+
+export interface AuditReportDetail extends AuditReport {
+  analyses: Record<string, any>;
+  raw_metrics: Record<string, any> | null;
+  comparison: {
+    previous_report_id: number;
+    previous_generated_at: string;
+    deltas: Record<string, AuditDelta | null>;
+  } | null;
+}

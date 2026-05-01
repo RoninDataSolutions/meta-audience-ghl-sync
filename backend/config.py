@@ -37,10 +37,17 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = ""
     SMTP_TO_EMAIL: str = ""
 
+    # Audit AI models
+    OPENAI_API_KEY: str = ""
+
     # App
     SYNC_SCHEDULE_CRON: str = "0 2 * * *"
     WEB_PORT: int = 9876
     LOG_LEVEL: str = "INFO"
+
+    # Audit
+    AUDIT_SCHEDULE_CRON: str = ""
+    AUDIT_EMAIL_TO: str = ""
 
     @property
     def DATABASE_URL(self) -> str:

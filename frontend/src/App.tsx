@@ -8,8 +8,13 @@ import SyncHistory from "./components/SyncHistory";
 import SyncDetailModal from "./components/SyncDetailModal";
 import ValueChart from "./components/ValueChart";
 import EmailSettings from "./components/EmailSettings";
+import AuditPage from "./pages/AuditPage";
+import AccountsPage from "./pages/AccountsPage";
+
+type Tab = "sync" | "audit" | "accounts";
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState<Tab>("sync");
   const [config, setConfig] = useState<SyncConfig | null>(null);
   const [metaAdAccountId, setMetaAdAccountId] = useState("");
   const [locationName, setLocationName] = useState("");
@@ -105,28 +110,45 @@ export default function App() {
         locationName={locationName}
       />
 
-      <main className="dashboard">
-        <div className="dashboard-grid">
-          <ConfigPanel config={config} onSaved={loadConfig} />
-          <StatusPanel
-            lastRun={syncStatus?.last_run || null}
-            metaAdAccountId={metaAdAccountId}
+      <nav className="tab-nav">
+        {(["sync", "audit", "accounts"] as Tab[]).map((tab) => (
+          <button
+            key={tab}
+            className={`tab-btn${activeTab === tab ? " tab-btn--active" : ""}`}
+            onClick={() => setActiveTab(tab)}
+          >
+            {tab === "sync" ? "Sync" : tab === "audit" ? "Audit" : "Accounts"}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === "sync" && (
+        <main className="dashboard">
+          <div className="dashboard-grid">
+            <ConfigPanel config={config} onSaved={loadConfig} />
+            <StatusPanel
+              lastRun={syncStatus?.last_run || null}
+              metaAdAccountId={metaAdAccountId}
+            />
+          </div>
+
+          <SyncHistory
+            runs={history}
+            page={historyPage}
+            totalPages={totalPages}
+            onPageChange={setHistoryPage}
+            onViewDetail={setSelectedRunId}
           />
-        </div>
 
-        <SyncHistory
-          runs={history}
-          page={historyPage}
-          totalPages={totalPages}
-          onPageChange={setHistoryPage}
-          onViewDetail={setSelectedRunId}
-        />
+          <div className="dashboard-grid">
+            <ValueChart distribution={distribution} />
+            <EmailSettings smtpFrom={smtpFrom} smtpTo={smtpTo} />
+          </div>
+        </main>
+      )}
 
-        <div className="dashboard-grid">
-          <ValueChart distribution={distribution} />
-          <EmailSettings smtpFrom={smtpFrom} smtpTo={smtpTo} />
-        </div>
-      </main>
+      {activeTab === "audit" && <AuditPage />}
+      {activeTab === "accounts" && <AccountsPage />}
 
       {selectedRunId !== null && (
         <SyncDetailModal

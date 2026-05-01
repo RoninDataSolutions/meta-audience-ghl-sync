@@ -126,29 +126,75 @@ async def upload_users(audience_id: str, schema: list[str], data: list[list[Any]
     }
 
 
+async def find_lookalike_for_source(origin_audience_id: str) -> dict | None:
+    """Find an existing lookalike audience whose source is origin_audience_id."""
+    ad_account = settings.META_AD_ACCOUNT_ID
+    if not ad_account.startswith("act_"):
+        ad_account = f"act_{ad_account}"
+    try:
+        result = await _request(
+            "get",
+            f"{BASE_URL}/{ad_account}/customaudiences",
+            params={
+                "access_token": settings.META_ACCESS_TOKEN,
+                "fields": "id,name,subtype,lookalike_spec",
+                "limit": 100,
+            },
+        )
+        for audience in result.get("data", []):
+            spec = audience.get("lookalike_spec") or {}
+            # Meta returns origins as {"origin": [{"id": "...", ...}]} or legacy string fields
+            origin_objects = spec.get("origin") or []
+            origin_ids_from_objects = [o.get("id", "") for o in origin_objects if isinstance(o, dict)]
+            legacy_ids = spec.get("origin_audience_id") or spec.get("origin_ids") or []
+            if isinstance(legacy_ids, str):
+                legacy_ids = [legacy_ids]
+            origins = origin_ids_from_objects + legacy_ids
+            if origin_audience_id in origins:
+                logger.info(f"Found existing lookalike {audience['id']} for source {origin_audience_id}")
+                return {"id": audience["id"], "name": audience.get("name", "")}
+    except Exception as e:
+        logger.warning(f"Could not search for existing lookalike: {e}")
+    return None
+
+
 async def create_lookalike_audience(
     origin_audience_id: str, name: str
 ) -> dict:
-    """Create a 1% Lookalike Audience (US) from the given source audience."""
+    """Create a 1% Lookalike Audience (US). If a duplicate already exists, reuse it."""
     ad_account = settings.META_AD_ACCOUNT_ID
     if not ad_account.startswith("act_"):
         ad_account = f"act_{ad_account}"
 
-    result = await _request(
-        "post",
-        f"{BASE_URL}/{ad_account}/customaudiences",
-        params={"access_token": settings.META_ACCESS_TOKEN},
-        json={
-            "name": name,
-            "subtype": "LOOKALIKE",
-            "origin_audience_id": origin_audience_id,
-            "lookalike_spec": {
-                "type": "custom_ratio",
-                "ratio": 0.01,
-                "country": "US",
+    try:
+        result = await _request(
+            "post",
+            f"{BASE_URL}/{ad_account}/customaudiences",
+            params={"access_token": settings.META_ACCESS_TOKEN},
+            json={
+                "name": name,
+                "subtype": "LOOKALIKE",
+                "origin_audience_id": origin_audience_id,
+                "lookalike_spec": {
+                    "type": "custom_ratio",
+                    "ratio": 0.01,
+                    "country": "US",
+                },
             },
-        },
-    )
-    lookalike_id = result.get("id")
-    logger.info(f"Created Lookalike Audience: {name} (ID: {lookalike_id})")
-    return {"id": lookalike_id, "name": name}
+        )
+        lookalike_id = result.get("id")
+        logger.info(f"Created Lookalike Audience: {name} (ID: {lookalike_id})")
+        return {"id": lookalike_id, "name": name}
+    except httpx.HTTPStatusError as e:
+        # Meta error 2654 = duplicate lookalike already exists — find and reuse it
+        if e.response.status_code == 400:
+            try:
+                body = e.response.json()
+                if body.get("error", {}).get("code") == 2654:
+                    logger.warning("Duplicate lookalike detected — searching for existing one")
+                    existing = await find_lookalike_for_source(origin_audience_id)
+                    if existing:
+                        return existing
+            except Exception:
+                pass
+        raise

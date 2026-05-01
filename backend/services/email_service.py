@@ -93,6 +93,74 @@ def send_failure_email(sync_run, error_message: str) -> None:
     _send_email(subject, html)
 
 
+def send_audit_email(
+    account_id: str,
+    account_name: str,
+    report_id: int,
+    metrics: dict,
+    pdf_bytes: bytes | None,
+    pdf_filename: str | None,
+) -> None:
+    """Send audit completion email with PDF attachment."""
+    from email.mime.application import MIMEApplication
+
+    to_email = settings.AUDIT_EMAIL_TO or settings.SMTP_TO_EMAIL
+    if not settings.SMTP_HOST or not to_email:
+        logger.warning("SMTP not configured, skipping audit email")
+        return
+
+    spend_7d = metrics.get("total_spend_7d", 0) or 0
+    spend_30d = metrics.get("total_spend_30d", 0) or 0
+    conv_30d = metrics.get("total_conversions_30d", 0) or 0
+    cpa_30d = metrics.get("avg_cpa_30d")
+    roas_30d = metrics.get("avg_roas_30d")
+
+    subject = f"Meta Audit Report — {account_name} — {__import__('datetime').date.today()}"
+    html = f"""
+    <h2>Meta Ad Account Audit Complete</h2>
+    <p><strong>Account:</strong> {account_name} ({account_id})</p>
+    <h3>30-Day Summary</h3>
+    <table border="1" cellpadding="6" cellspacing="0">
+        <tr><th>Metric</th><th>7 Days</th><th>30 Days</th></tr>
+        <tr><td>Spend</td><td>${spend_7d:,.2f}</td><td>${spend_30d:,.2f}</td></tr>
+        <tr><td>Conversions</td><td>{metrics.get('total_conversions_7d', '—')}</td><td>{conv_30d}</td></tr>
+        <tr><td>CPA</td><td>—</td><td>${cpa_30d:,.2f if cpa_30d else '—'}</td></tr>
+        <tr><td>ROAS</td><td>—</td><td>{f'{roas_30d:.2f}x' if roas_30d else '—'}</td></tr>
+    </table>
+    <p>Full report attached as PDF. Report ID: {report_id}</p>
+    """
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"] = settings.SMTP_FROM_EMAIL
+    msg["To"] = to_email
+    msg.attach(MIMEText(html, "html"))
+
+    if pdf_bytes and pdf_filename:
+        attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+        attachment.add_header("Content-Disposition", "attachment", filename=pdf_filename)
+        msg.attach(attachment)
+
+    try:
+        if settings.SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as server:
+                if settings.SMTP_USERNAME:
+                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                server.sendmail(settings.SMTP_FROM_EMAIL, to_email, msg.as_string())
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=30) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                if settings.SMTP_USERNAME:
+                    server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+                server.sendmail(settings.SMTP_FROM_EMAIL, to_email, msg.as_string())
+        logger.info(f"Audit email sent: {subject}")
+    except Exception as e:
+        logger.error(f"Failed to send audit email: {e}")
+        raise
+
+
 def send_test_email() -> None:
     """Send a test email to verify SMTP configuration."""
     subject = "GHL Meta Sync - Test Email"
