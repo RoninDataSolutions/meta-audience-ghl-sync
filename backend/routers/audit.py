@@ -68,11 +68,26 @@ def _resolve_account(account_id: str | None, db: Session) -> tuple[str, str]:
     return env_id, settings.META_ACCESS_TOKEN
 
 
-async def _run_audit_background(report_id: int, account_id: str, token: str, models_to_run: list[str]):
+async def _run_audit_background(
+    report_id: int,
+    account_id: str,
+    token: str,
+    models_to_run: list[str],
+    business_profile: dict | None = None,
+    website_url: str | None = None,
+):
     db = SessionLocal()
     try:
         from services.meta_audit import run_audit
-        await run_audit(report_id=report_id, account_id=account_id, token=token, db=db, models_to_run=models_to_run)
+        await run_audit(
+            report_id=report_id,
+            account_id=account_id,
+            token=token,
+            db=db,
+            models_to_run=models_to_run,
+            business_profile=business_profile,
+            website_url=website_url,
+        )
     except Exception as e:
         logger.error(f"Background audit {report_id} failed: {e}", exc_info=True)
     finally:
@@ -116,7 +131,13 @@ async def trigger_audit(payload: AuditTriggerRequest, db: Session = Depends(get_
         account_record.last_audit_at = datetime.now(timezone.utc)
         db.commit()
 
-    asyncio.create_task(_run_audit_background(report.id, account_id, token, models_to_run))
+    business_profile = account_record.business_profile if account_record else None
+    website_url = account_record.website_url if account_record else None
+    asyncio.create_task(_run_audit_background(
+        report.id, account_id, token, models_to_run,
+        business_profile=business_profile,
+        website_url=website_url,
+    ))
 
     return {
         "status": "started",

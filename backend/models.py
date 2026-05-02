@@ -61,6 +61,8 @@ class AdAccount(Base):
     last_audit_at = Column(DateTime, nullable=True)
     currency = Column(String(10), nullable=True)
     timezone_name = Column(String(100), nullable=True)
+    website_url = Column(Text, nullable=True)
+    business_profile = Column(JSON, nullable=True, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))

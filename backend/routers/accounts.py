@@ -15,12 +15,24 @@ router = APIRouter()
 BASE_META_URL = "https://graph.facebook.com/v21.0"
 
 
+class BusinessProfile(BaseModel):
+    industry: str | None = None
+    description: str | None = None
+    target_customer: str | None = None
+    avg_order_value: float | None = None
+    primary_goal: str | None = None
+    facebook_page_id: str | None = None
+    competitor_page_ids: str | None = None  # comma-separated page IDs
+
+
 class AccountCreate(BaseModel):
     account_id: str
     account_name: str
     meta_access_token: str | None = None
     notification_email: str | None = None
     audit_cron: str | None = None
+    website_url: str | None = None
+    business_profile: BusinessProfile | None = None
 
 
 class AccountUpdate(BaseModel):
@@ -29,6 +41,8 @@ class AccountUpdate(BaseModel):
     notification_email: str | None = None
     audit_cron: str | None = None
     is_active: bool | None = None
+    website_url: str | None = None
+    business_profile: BusinessProfile | None = None
 
 
 def _account_to_dict(account: AdAccount) -> dict:
@@ -43,6 +57,8 @@ def _account_to_dict(account: AdAccount) -> dict:
         "last_audit_at": account.last_audit_at.isoformat() if account.last_audit_at else None,
         "currency": account.currency,
         "timezone_name": account.timezone_name,
+        "website_url": account.website_url,
+        "business_profile": account.business_profile or {},
         "created_at": account.created_at.isoformat() if account.created_at else None,
     }
 
@@ -92,6 +108,8 @@ async def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
         audit_cron=payload.audit_cron,
         currency=meta_info.get("currency"),
         timezone_name=meta_info.get("timezone_name"),
+        website_url=payload.website_url,
+        business_profile=payload.business_profile.model_dump(exclude_none=True) if payload.business_profile else {},
     )
     db.add(account)
     db.commit()
@@ -123,6 +141,10 @@ def update_account(account_db_id: int, payload: AccountUpdate, db: Session = Dep
         account.audit_cron = payload.audit_cron or None
     if payload.is_active is not None:
         account.is_active = payload.is_active
+    if payload.website_url is not None:
+        account.website_url = payload.website_url or None
+    if payload.business_profile is not None:
+        account.business_profile = payload.business_profile.model_dump(exclude_none=True)
 
     db.commit()
     db.refresh(account)

@@ -21,6 +21,17 @@ function cronLabel(cron: string | null): string {
   return preset ? preset.label : cron;
 }
 
+const PRIMARY_GOALS = [
+  { label: "Select goal…", value: "" },
+  { label: "Lead Generation", value: "leads" },
+  { label: "E-commerce / Purchases", value: "purchases" },
+  { label: "Bookings / Appointments", value: "bookings" },
+  { label: "App Installs", value: "app_installs" },
+  { label: "Brand Awareness", value: "awareness" },
+  { label: "Course / Membership Sales", value: "course_sales" },
+  { label: "Consulting / Services", value: "consulting" },
+];
+
 interface FormState {
   account_id: string;
   account_name: string;
@@ -28,6 +39,15 @@ interface FormState {
   notification_email: string;
   audit_cron: string;
   custom_cron: boolean;
+  // Business profile
+  website_url: string;
+  industry: string;
+  description: string;
+  target_customer: string;
+  avg_order_value: string;
+  primary_goal: string;
+  facebook_page_id: string;
+  competitor_page_ids: string;
 }
 
 const emptyForm = (): FormState => ({
@@ -37,6 +57,14 @@ const emptyForm = (): FormState => ({
   notification_email: "",
   audit_cron: "",
   custom_cron: false,
+  website_url: "",
+  industry: "",
+  description: "",
+  target_customer: "",
+  avg_order_value: "",
+  primary_goal: "",
+  facebook_page_id: "",
+  competitor_page_ids: "",
 });
 
 export default function AccountsPage() {
@@ -71,6 +99,7 @@ export default function AccountsPage() {
 
   const openEdit = (a: AdAccount) => {
     setEditId(a.id);
+    const bp = a.business_profile || {};
     setForm({
       account_id: a.account_id,
       account_name: a.account_name,
@@ -78,6 +107,14 @@ export default function AccountsPage() {
       notification_email: a.notification_email || "",
       audit_cron: a.audit_cron || "",
       custom_cron: !CRON_PRESETS.some((p) => p.value === (a.audit_cron || "")),
+      website_url: a.website_url || "",
+      industry: bp.industry || "",
+      description: bp.description || "",
+      target_customer: bp.target_customer || "",
+      avg_order_value: bp.avg_order_value != null ? String(bp.avg_order_value) : "",
+      primary_goal: bp.primary_goal || "",
+      facebook_page_id: bp.facebook_page_id || "",
+      competitor_page_ids: bp.competitor_page_ids || "",
     });
     setError("");
     setShowForm(true);
@@ -88,12 +125,23 @@ export default function AccountsPage() {
     setSaving(true);
     try {
       const cronValue = form.audit_cron || undefined;
+      const bp = {
+        ...(form.industry && { industry: form.industry }),
+        ...(form.description && { description: form.description }),
+        ...(form.target_customer && { target_customer: form.target_customer }),
+        ...(form.avg_order_value && { avg_order_value: parseFloat(form.avg_order_value) }),
+        ...(form.primary_goal && { primary_goal: form.primary_goal }),
+        ...(form.facebook_page_id && { facebook_page_id: form.facebook_page_id }),
+        ...(form.competitor_page_ids && { competitor_page_ids: form.competitor_page_ids }),
+      };
       if (editId !== null) {
         await updateAccount(editId, {
           account_name: form.account_name,
           meta_access_token: form.meta_access_token || undefined,
           notification_email: form.notification_email || undefined,
           audit_cron: cronValue,
+          website_url: form.website_url || undefined,
+          business_profile: Object.keys(bp).length ? bp : undefined,
         });
       } else {
         await createAccount({
@@ -102,6 +150,8 @@ export default function AccountsPage() {
           meta_access_token: form.meta_access_token || undefined,
           notification_email: form.notification_email || undefined,
           audit_cron: cronValue,
+          website_url: form.website_url || undefined,
+          business_profile: Object.keys(bp).length ? bp : undefined,
         });
       }
       setShowForm(false);
@@ -292,6 +342,104 @@ export default function AccountsPage() {
                     onChange={(e) => setForm({ ...form, audit_cron: e.target.value })}
                   />
                 )}
+              </div>
+
+              {/* Business Profile */}
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: "1rem", marginTop: "0.5rem" }}>
+                <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "0.75rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Business Profile — used by AI to make grounded assessments
+                </p>
+
+                <div className="form-group">
+                  <label>Website URL</label>
+                  <input
+                    type="url"
+                    className="form-input"
+                    placeholder="https://yourbusiness.com"
+                    value={form.website_url}
+                    onChange={(e) => setForm({ ...form, website_url: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Industry</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Fitness & Wellness, E-commerce, Real Estate"
+                    value={form.industry}
+                    onChange={(e) => setForm({ ...form, industry: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Business Description</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Online prenatal yoga courses for expecting mothers"
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Target Customer</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Women 25–40, pregnant or postpartum"
+                    value={form.target_customer}
+                    onChange={(e) => setForm({ ...form, target_customer: e.target.value })}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                  <div className="form-group">
+                    <label>Avg Order Value ($)</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      placeholder="97"
+                      value={form.avg_order_value}
+                      onChange={(e) => setForm({ ...form, avg_order_value: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Primary Goal</label>
+                    <select
+                      className="form-select"
+                      value={form.primary_goal}
+                      onChange={(e) => setForm({ ...form, primary_goal: e.target.value })}
+                    >
+                      {PRIMARY_GOALS.map((g) => (
+                        <option key={g.value} value={g.value}>{g.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Facebook Page ID</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. 123456789 — enables page stats + ad library fetch"
+                    value={form.facebook_page_id}
+                    onChange={(e) => setForm({ ...form, facebook_page_id: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Competitor Page IDs</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Comma-separated Facebook page IDs of competitors"
+                    value={form.competitor_page_ids}
+                    onChange={(e) => setForm({ ...form, competitor_page_ids: e.target.value })}
+                  />
+                </div>
               </div>
 
               <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>

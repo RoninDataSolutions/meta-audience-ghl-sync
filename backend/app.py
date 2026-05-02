@@ -21,10 +21,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _run_migrations():
+    """Add new columns to existing tables without Alembic."""
+    from sqlalchemy import text
+    from database import engine
+    migrations = [
+        "ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS website_url TEXT",
+        "ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS business_profile JSONB",
+    ]
+    with engine.connect() as conn:
+        for stmt in migrations:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"Migration skipped: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting GHL-Meta Audience Sync application")
     init_db()
+    _run_migrations()
     logger.info("Database tables created/verified")
     start_scheduler()
     logger.info("Scheduler started")

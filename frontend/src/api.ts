@@ -92,6 +92,8 @@ export async function createAccount(payload: {
   meta_access_token?: string;
   notification_email?: string;
   audit_cron?: string;
+  website_url?: string;
+  business_profile?: Record<string, unknown>;
 }): Promise<AdAccount> {
   return request("/api/accounts", { method: "POST", body: JSON.stringify(payload) });
 }
@@ -104,6 +106,8 @@ export async function updateAccount(
     notification_email?: string;
     audit_cron?: string;
     is_active?: boolean;
+    website_url?: string;
+    business_profile?: Record<string, unknown>;
   }
 ): Promise<AdAccount> {
   return request(`/api/accounts/${id}`, { method: "PUT", body: JSON.stringify(payload) });

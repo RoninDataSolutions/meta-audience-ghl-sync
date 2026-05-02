@@ -68,6 +68,16 @@ AUDIT_SYSTEM_PROMPT = """You are a senior paid-media strategist auditing a Meta 
 
 You will receive structured performance data for 7-day, 30-day, 60-day, and 90-day windows at campaign, ad set, and ad levels, plus platform/placement breakdowns, demographic breakdowns, creative metadata, and audience information.
 
+IMPORTANT — Business Context:
+The payload may contain a "business_context" key with the following enrichment data. USE THIS to make grounded, specific assessments:
+- "profile": manually entered business info — industry, target customer, avg order value, primary goal. Use this to benchmark CPA, ROAS, and CTR against realistic expectations for the business type.
+- "website": scraped from the business website — title, meta description, headings, pricing found, CTAs, platform (Shopify, Kajabi, etc.). Use this to assess landing page/ad message alignment and price-point context.
+- "page_stats": the business's own Facebook page — follower count, rating, posting frequency. Flag if the page is thin or inactive relative to ad spend.
+- "own_ad_library": their currently active ads in the Meta Ad Library — total count, oldest running ad (long-running = proven winner or fatigue risk). Flag zombie ads.
+- "competitor_ads": active ads from competitor pages. Note format, messaging, and creative patterns the competition is using. Identify gaps or opportunities.
+
+When business_context is present, integrate it throughout your analysis — don't summarize it separately. Cite actual prices, CTAs, page follower counts, and competitor observations inline.
+
 Key fields to understand:
 - "objective": the Meta campaign objective (OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_TRAFFIC, etc.)
 - "primary_action": the conversion event this campaign optimizes for (lead, purchase, link_click, etc.)
@@ -409,6 +419,152 @@ async def fetch_breakdown(
             "limit": 500,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Enrichment fetchers
+# ---------------------------------------------------------------------------
+
+async def fetch_page_stats(page_id: str, token: str) -> dict:
+    """Fetch public Facebook page stats — follower count, rating, recent activity."""
+    if not page_id:
+        return {}
+    try:
+        data = await _api_get(
+            f"{BASE_URL}/{page_id}",
+            token,
+            params={
+                "fields": (
+                    "name,fan_count,followers_count,overall_star_rating,"
+                    "rating_count,about,category,website,posts.limit(5){message,created_time}"
+                ),
+            },
+        )
+        posts = data.pop("posts", {}).get("data", [])
+        last_post_date = posts[0].get("created_time", "") if posts else None
+
+        # Derive posting frequency from last 5 posts
+        post_dates = []
+        for p in posts:
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(p["created_time"].replace("Z", "+00:00"))
+                post_dates.append(dt)
+            except Exception:
+                pass
+
+        posts_per_week = None
+        if len(post_dates) >= 2:
+            span_days = (post_dates[0] - post_dates[-1]).days or 1
+            posts_per_week = round(len(post_dates) / span_days * 7, 1)
+
+        return {
+            "page_id": page_id,
+            "name": data.get("name"),
+            "fan_count": data.get("fan_count"),
+            "followers_count": data.get("followers_count"),
+            "rating": data.get("overall_star_rating"),
+            "review_count": data.get("rating_count"),
+            "about": data.get("about", "")[:300],
+            "category": data.get("category"),
+            "website": data.get("website"),
+            "last_post_date": last_post_date,
+            "posts_per_week_est": posts_per_week,
+        }
+    except Exception as e:
+        logger.warning(f"fetch_page_stats failed for page {page_id}: {e}")
+        return {"page_id": page_id, "error": str(e)[:200]}
+
+
+async def fetch_ad_library(page_id: str, token: str, country: str = "US") -> dict:
+    """
+    Fetch active ads from the Meta Ad Library for a given page.
+    Returns own active ads + summary stats.
+    """
+    if not page_id:
+        return {}
+    try:
+        rows = await _api_get_paginated(
+            f"{BASE_URL}/ads_archive",
+            token,
+            params={
+                "search_page_ids": page_id,
+                "ad_reached_countries": country,
+                "ad_active_status": "ACTIVE",
+                "fields": (
+                    "id,ad_creative_body,ad_creative_link_title,"
+                    "ad_creative_link_description,ad_delivery_start_time,"
+                    "ad_snapshot_url,page_name,impressions,spend"
+                ),
+                "limit": 50,
+            },
+        )
+        # Summarise
+        total_active = len(rows)
+        oldest_start = None
+        for r in rows:
+            start = r.get("ad_delivery_start_time", "")
+            if start and (oldest_start is None or start < oldest_start):
+                oldest_start = start
+
+        sample = []
+        for r in rows[:5]:
+            sample.append({
+                "title": (r.get("ad_creative_link_title") or "")[:80],
+                "body": (r.get("ad_creative_body") or "")[:150],
+                "running_since": r.get("ad_delivery_start_time"),
+                "snapshot_url": r.get("ad_snapshot_url"),
+            })
+
+        return {
+            "page_id": page_id,
+            "total_active_ads": total_active,
+            "oldest_active_since": oldest_start,
+            "sample_ads": sample,
+        }
+    except Exception as e:
+        logger.warning(f"fetch_ad_library failed for page {page_id}: {e}")
+        return {"page_id": page_id, "error": str(e)[:200]}
+
+
+async def fetch_competitor_ads(competitor_page_ids: list[str], token: str, country: str = "US") -> list[dict]:
+    """Fetch active ads from competitor pages via the Ad Library."""
+    if not competitor_page_ids:
+        return []
+    results = []
+    for page_id in competitor_page_ids[:5]:  # cap at 5 competitors
+        try:
+            rows = await _api_get_paginated(
+                f"{BASE_URL}/ads_archive",
+                token,
+                params={
+                    "search_page_ids": page_id,
+                    "ad_reached_countries": country,
+                    "ad_active_status": "ACTIVE",
+                    "fields": (
+                        "id,ad_creative_body,ad_creative_link_title,"
+                        "ad_delivery_start_time,page_name"
+                    ),
+                    "limit": 20,
+                },
+            )
+            if rows:
+                results.append({
+                    "page_id": page_id,
+                    "page_name": rows[0].get("page_name", page_id),
+                    "active_ad_count": len(rows),
+                    "sample_creatives": [
+                        {
+                            "title": (r.get("ad_creative_link_title") or "")[:80],
+                            "body": (r.get("ad_creative_body") or "")[:150],
+                            "running_since": r.get("ad_delivery_start_time"),
+                        }
+                        for r in rows[:3]
+                    ],
+                })
+        except Exception as e:
+            logger.warning(f"fetch_competitor_ads failed for {page_id}: {e}")
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -843,7 +999,12 @@ def _truncate_payload(payload: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def build_audit_payload(account_id: str, token: str) -> dict:
+async def build_audit_payload(
+    account_id: str,
+    token: str,
+    business_profile: dict | None = None,
+    website_url: str | None = None,
+) -> dict:
     """Fetch all Meta data and return the structured audit payload."""
 
     # Pre-compute date windows
@@ -977,6 +1138,61 @@ async def build_audit_payload(account_id: str, token: str) -> dict:
         },
     }
 
+    # ── Business context enrichment (runs in parallel) ──────────────────────
+    bp = business_profile or {}
+    page_id = bp.get("facebook_page_id", "")
+    competitor_page_ids = [
+        p.strip() for p in bp.get("competitor_page_ids", "").split(",") if p.strip()
+    ]
+
+    enrichment_tasks = []
+    enrichment_labels = []
+
+    if page_id:
+        enrichment_tasks.append(fetch_page_stats(page_id, token))
+        enrichment_labels.append("page_stats")
+        enrichment_tasks.append(fetch_ad_library(page_id, token))
+        enrichment_labels.append("own_ad_library")
+
+    if competitor_page_ids:
+        enrichment_tasks.append(fetch_competitor_ads(competitor_page_ids, token))
+        enrichment_labels.append("competitor_ads")
+
+    if website_url:
+        from services.web_scraper import scrape_website
+        enrichment_tasks.append(scrape_website(website_url))
+        enrichment_labels.append("website")
+
+    if enrichment_tasks:
+        enrichment_results = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
+        business_context: dict = {}
+        if bp:
+            business_context["profile"] = {
+                "industry": bp.get("industry", ""),
+                "description": bp.get("description", ""),
+                "target_customer": bp.get("target_customer", ""),
+                "avg_order_value": bp.get("avg_order_value"),
+                "primary_goal": bp.get("primary_goal", ""),
+            }
+        for label, result in zip(enrichment_labels, enrichment_results):
+            if isinstance(result, Exception):
+                logger.warning(f"Enrichment task '{label}' failed: {result}")
+                business_context[label] = {"error": str(result)[:200]}
+            else:
+                business_context[label] = result
+        payload["business_context"] = business_context
+    elif bp:
+        # No async enrichment but profile data still present
+        payload["business_context"] = {
+            "profile": {
+                "industry": bp.get("industry", ""),
+                "description": bp.get("description", ""),
+                "target_customer": bp.get("target_customer", ""),
+                "avg_order_value": bp.get("avg_order_value"),
+                "primary_goal": bp.get("primary_goal", ""),
+            }
+        }
+
     payload = _truncate_payload(payload)
     return payload
 
@@ -987,12 +1203,18 @@ async def run_audit(
     token: str,
     db: Any,
     models_to_run: list[str],
+    business_profile: dict | None = None,
+    website_url: str | None = None,
 ) -> None:
     """Full audit workflow. Updates AuditReport row when done."""
     try:
-        # 1. Fetch all Meta data
+        # 1. Fetch all Meta data + enrichment
         logger.info(f"Audit {report_id}: building payload for account {account_id}")
-        payload = await build_audit_payload(account_id, token)
+        payload = await build_audit_payload(
+            account_id, token,
+            business_profile=business_profile,
+            website_url=website_url,
+        )
 
         # 2. Serialize payload
         payload_str = json.dumps(payload)

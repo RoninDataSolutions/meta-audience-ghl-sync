@@ -69,6 +69,16 @@ export interface SyncHistory {
 
 // ── Audit ──────────────────────────────────────────────────────────────────
 
+export interface BusinessProfile {
+  industry?: string;
+  description?: string;
+  target_customer?: string;
+  avg_order_value?: number;
+  primary_goal?: string;
+  facebook_page_id?: string;
+  competitor_page_ids?: string;
+}
+
 export interface AdAccount {
   id: number;
   account_id: string;
@@ -80,6 +90,8 @@ export interface AdAccount {
   last_audit_at: string | null;
   currency: string | null;
   timezone_name: string | null;
+  website_url: string | null;
+  business_profile: BusinessProfile;
   created_at: string | null;
 }
 
