@@ -135,3 +135,74 @@ async def get_all_contacts() -> list[dict]:
 
     logger.info(f"Fetched {len(all_contacts)} total contacts from location")
     return all_contacts
+
+
+_PRESALE_CHANNELS = {"TYPE_INSTAGRAM", "TYPE_WHATSAPP", "TYPE_FACEBOOK"}
+
+
+async def fetch_conversations(days: int = 60, max_count: int = 120) -> list[dict]:
+    """Fetch recent Instagram/WhatsApp/Facebook conversations from the last N days."""
+    import time as _time
+    cutoff_ms = (_time.time() - days * 86400) * 1000
+    results: list[dict] = []
+    start_after_date: int | None = None
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        while len(results) < max_count:
+            params: dict[str, Any] = {
+                "locationId": settings.GHL_LOCATION_ID,
+                "limit": 50,
+            }
+            if start_after_date:
+                params["startAfterDate"] = start_after_date
+
+            resp = await _request_with_retry(
+                client, "GET",
+                f"{BASE_URL}/conversations/search",
+                headers=_headers(),
+                params=params,
+            )
+            if not resp.is_success:
+                logger.warning(f"Conversations fetch failed: {resp.status_code}")
+                break
+
+            data = resp.json()
+            convs = data.get("conversations", [])
+            if not convs:
+                break
+
+            for c in convs:
+                last_msg_ts = c.get("lastMessageDate", 0)
+                # Conversations are sorted newest-first; stop when we pass the cutoff
+                if last_msg_ts < cutoff_ms:
+                    return results
+                if c.get("lastMessageType") in _PRESALE_CHANNELS:
+                    results.append(c)
+                    if len(results) >= max_count:
+                        return results
+
+            if len(convs) < 50:
+                break
+            start_after_date = convs[-1].get("lastMessageDate")
+
+    logger.info(f"Fetched {len(results)} pre-sale conversations (last {days}d)")
+    return results
+
+
+async def fetch_conversation_messages(conv_id: str, limit: int = 20) -> list[dict]:
+    """Fetch messages for a single conversation."""
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await _request_with_retry(
+            client, "GET",
+            f"{BASE_URL}/conversations/{conv_id}/messages",
+            headers=_headers(),
+            params={"limit": limit},
+        )
+        if not resp.is_success:
+            return []
+        data = resp.json()
+        msgs = data.get("messages", {})
+        # API returns {"messages": {"messages": [...], "nextPage": bool, ...}}
+        if isinstance(msgs, dict):
+            return msgs.get("messages", [])
+        return msgs if isinstance(msgs, list) else []

@@ -63,6 +63,7 @@ class AdAccount(Base):
     timezone_name = Column(String(100), nullable=True)
     website_url = Column(Text, nullable=True)
     business_profile = Column(JSON, nullable=True, default=dict)
+    business_notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
@@ -91,6 +92,8 @@ class AuditReport(Base):
     audience_count = Column(Integer, nullable=True)
     pdf_report = Column(LargeBinary, nullable=True)
     pdf_filename = Column(String(255), nullable=True)
+    report_notes = Column(Text, nullable=True)
+    audit_contexts = Column(JSON, nullable=True)
     status = Column(String(20), nullable=False, default="in_progress")
     error_message = Column(Text, nullable=True)
     models_used = Column(String(255), nullable=True)

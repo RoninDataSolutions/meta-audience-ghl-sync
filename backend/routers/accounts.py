@@ -33,6 +33,7 @@ class AccountCreate(BaseModel):
     audit_cron: str | None = None
     website_url: str | None = None
     business_profile: BusinessProfile | None = None
+    business_notes: str | None = None
 
 
 class AccountUpdate(BaseModel):
@@ -43,6 +44,7 @@ class AccountUpdate(BaseModel):
     is_active: bool | None = None
     website_url: str | None = None
     business_profile: BusinessProfile | None = None
+    business_notes: str | None = None
 
 
 def _account_to_dict(account: AdAccount) -> dict:
@@ -59,6 +61,7 @@ def _account_to_dict(account: AdAccount) -> dict:
         "timezone_name": account.timezone_name,
         "website_url": account.website_url,
         "business_profile": account.business_profile or {},
+        "business_notes": account.business_notes,
         "created_at": account.created_at.isoformat() if account.created_at else None,
     }
 
@@ -110,6 +113,7 @@ async def create_account(payload: AccountCreate, db: Session = Depends(get_db)):
         timezone_name=meta_info.get("timezone_name"),
         website_url=payload.website_url,
         business_profile=payload.business_profile.model_dump(exclude_none=True) if payload.business_profile else {},
+        business_notes=payload.business_notes,
     )
     db.add(account)
     db.commit()
@@ -145,6 +149,8 @@ def update_account(account_db_id: int, payload: AccountUpdate, db: Session = Dep
         account.website_url = payload.website_url or None
     if payload.business_profile is not None:
         account.business_profile = payload.business_profile.model_dump(exclude_none=True)
+    if payload.business_notes is not None:
+        account.business_notes = payload.business_notes or None
 
     db.commit()
     db.refresh(account)

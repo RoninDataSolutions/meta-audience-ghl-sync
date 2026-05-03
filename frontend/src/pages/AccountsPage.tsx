@@ -7,6 +7,12 @@ import {
   deactivateAccount,
   testAccountToken,
 } from "../api";
+import BusinessProfileWizard from "../components/BusinessProfileWizard";
+
+function isProfileComplete(account: AdAccount): boolean {
+  const bp = account.business_profile;
+  return !!(bp?.industry && bp?.primary_goal);
+}
 
 const CRON_PRESETS = [
   { label: "Manual only", value: "" },
@@ -24,12 +30,13 @@ function cronLabel(cron: string | null): string {
 const PRIMARY_GOALS = [
   { label: "Select goal…", value: "" },
   { label: "Lead Generation", value: "leads" },
-  { label: "E-commerce / Purchases", value: "purchases" },
+  { label: "Direct Purchase — Package / Class / Product", value: "purchases" },
   { label: "Bookings / Appointments", value: "bookings" },
+  { label: "Recurring Membership / Subscription", value: "membership" },
   { label: "App Installs", value: "app_installs" },
   { label: "Brand Awareness", value: "awareness" },
-  { label: "Course / Membership Sales", value: "course_sales" },
-  { label: "Consulting / Services", value: "consulting" },
+  { label: "Course / Digital Product Sales", value: "course_sales" },
+  { label: "Consulting / High-Ticket Services", value: "consulting" },
 ];
 
 interface FormState {
@@ -76,6 +83,7 @@ export default function AccountsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [testResults, setTestResults] = useState<Record<number, string>>({});
+  const [wizardAccount, setWizardAccount] = useState<AdAccount | null>(null);
 
   const load = async () => {
     try {
@@ -143,6 +151,8 @@ export default function AccountsPage() {
           website_url: form.website_url || undefined,
           business_profile: Object.keys(bp).length ? bp : undefined,
         });
+        setShowForm(false);
+        load();
       } else {
         await createAccount({
           account_id: form.account_id,
@@ -153,9 +163,16 @@ export default function AccountsPage() {
           website_url: form.website_url || undefined,
           business_profile: Object.keys(bp).length ? bp : undefined,
         });
+        setShowForm(false);
+        const refreshed = await getAccounts();
+        const newAccount = refreshed.accounts.find((a) => a.account_id === form.account_id);
+        // Auto-open wizard if no business profile was filled in
+        if (newAccount && !isProfileComplete(newAccount)) {
+          setWizardAccount(newAccount);
+        }
+        setAccounts(refreshed.accounts);
+        return;
       }
-      setShowForm(false);
-      load();
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -190,8 +207,30 @@ export default function AccountsPage() {
 
   if (loading) return <div className="dashboard" style={{ padding: "2rem" }}>Loading accounts…</div>;
 
+  const incompleteCount = accounts.filter((a) => a.is_active && !isProfileComplete(a)).length;
+
   return (
     <main className="dashboard">
+      {incompleteCount > 0 && (
+        <div style={{
+          background: "rgba(217,119,6,0.12)",
+          border: "1px solid rgba(217,119,6,0.35)",
+          borderRadius: "8px",
+          padding: "0.75rem 1rem",
+          marginBottom: "1rem",
+          fontSize: "0.85rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+        }}>
+          <span style={{ color: "#d97706", fontWeight: 700 }}>⚠</span>
+          <span>
+            <strong>{incompleteCount} account{incompleteCount !== 1 ? "s" : ""}</strong> {incompleteCount !== 1 ? "are" : "is"} missing a business profile.
+            AI audit analysis and campaign recommendations improve significantly with profile data.
+          </span>
+        </div>
+      )}
+
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
           <h2 style={{ margin: 0 }}>Ad Accounts</h2>
@@ -210,6 +249,7 @@ export default function AccountsPage() {
                 <th>Name</th>
                 <th>Account ID</th>
                 <th>Token</th>
+                <th>Profile</th>
                 <th>Schedule</th>
                 <th>Last Audit</th>
                 <th>Status</th>
@@ -217,46 +257,72 @@ export default function AccountsPage() {
               </tr>
             </thead>
             <tbody>
-              {accounts.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.account_name}</td>
-                  <td><code style={{ fontSize: "0.8rem" }}>{a.account_id}</code></td>
-                  <td>
-                    <span className={`badge ${a.has_custom_token ? "badge-success" : "badge-neutral"}`}>
-                      {a.has_custom_token ? "Custom" : "Default"}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: "0.85rem" }}>{cronLabel(a.audit_cron)}</td>
-                  <td style={{ fontSize: "0.85rem" }}>
-                    {a.last_audit_at ? new Date(a.last_audit_at).toLocaleDateString() : "—"}
-                  </td>
-                  <td>
-                    <span className={`badge ${a.is_active ? "badge-success" : "badge-neutral"}`}>
-                      {a.is_active ? "Active" : "Inactive"}
-                    </span>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                      <button className="btn btn-sm" onClick={() => openEdit(a)}>Edit</button>
-                      <button className="btn btn-sm" onClick={() => handleTest(a.id)}>Test</button>
-                      {a.is_active && (
-                        <button className="btn btn-sm btn-danger" onClick={() => handleDeactivate(a.id)}>
-                          Deactivate
+              {accounts.map((a) => {
+                const complete = isProfileComplete(a);
+                return (
+                  <tr key={a.id}>
+                    <td>{a.account_name}</td>
+                    <td><code style={{ fontSize: "0.8rem" }}>{a.account_id}</code></td>
+                    <td>
+                      <span className={`badge ${a.has_custom_token ? "badge-success" : "badge-neutral"}`}>
+                        {a.has_custom_token ? "Custom" : "Default"}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge ${complete ? "badge-success" : "badge-neutral"}`} title={complete ? `${a.business_profile?.industry} · ${a.business_profile?.primary_goal}` : "No business profile"}>
+                        {complete ? "Complete" : "Incomplete"}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: "0.85rem" }}>{cronLabel(a.audit_cron)}</td>
+                    <td style={{ fontSize: "0.85rem" }}>
+                      {a.last_audit_at ? new Date(a.last_audit_at).toLocaleDateString() : "—"}
+                    </td>
+                    <td>
+                      <span className={`badge ${a.is_active ? "badge-success" : "badge-neutral"}`}>
+                        {a.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                        <button className="btn btn-sm" onClick={() => openEdit(a)}>Edit</button>
+                        <button
+                          className="btn btn-sm"
+                          style={!complete ? { background: "rgba(217,119,6,0.15)", borderColor: "#d97706", color: "#d97706" } : {}}
+                          onClick={() => setWizardAccount(a)}
+                        >
+                          {complete ? "Profile" : "Setup Profile"}
                         </button>
-                      )}
-                    </div>
-                    {testResults[a.id] && (
-                      <div style={{ fontSize: "0.75rem", marginTop: "0.25rem", color: testResults[a.id].startsWith("✓") ? "var(--success)" : "var(--danger)" }}>
-                        {testResults[a.id]}
+                        <button className="btn btn-sm" onClick={() => handleTest(a.id)}>Test</button>
+                        {a.is_active && (
+                          <button className="btn btn-sm btn-danger" onClick={() => handleDeactivate(a.id)}>
+                            Deactivate
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                      {testResults[a.id] && (
+                        <div style={{ fontSize: "0.75rem", marginTop: "0.25rem", color: testResults[a.id].startsWith("✓") ? "var(--success)" : "var(--danger)" }}>
+                          {testResults[a.id]}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
       </div>
+
+      {wizardAccount && (
+        <BusinessProfileWizard
+          account={wizardAccount}
+          onSave={async () => {
+            setWizardAccount(null);
+            load();
+          }}
+          onClose={() => setWizardAccount(null)}
+        />
+      )}
 
       {showForm && (
         <div className="modal-overlay" onClick={() => setShowForm(false)}>

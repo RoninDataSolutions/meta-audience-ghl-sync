@@ -1111,6 +1111,153 @@ def _render_analysis_section(analysis: dict) -> list:
             story.append(Paragraph(f"<b>{i}.</b>  {_safe_xml(action_text)}", STYLES["action_body"]))
             story.append(Spacer(1, 4))
 
+    # 30-Day Projection
+    projection = analysis.get("projection_30d", {})
+    if projection and isinstance(projection, dict):
+        story += section_header("30-DAY PROJECTION")
+
+        trajectory = str(projection.get("trajectory", "")).lower()
+        if trajectory:
+            traj_colors = {
+                "improving": (GREEN_BG, GREEN_DARK),
+                "declining":  (RED_BG,   RED_DARK),
+                "stable":     (BLUE_BG,  BLUE_DARK),
+                "volatile":   (AMBER_BG, AMBER_TEXT),
+            }
+            bg, tc = traj_colors.get(trajectory, (GRAY_LIGHT, GRAY))
+            traj_p = Paragraph(
+                trajectory.upper(),
+                ParagraphStyle("traj", parent=STYLES["cell_bold"], textColor=tc),
+            )
+            traj_badge = Table([[traj_p]], colWidths=[1.2 * inch])
+            traj_badge.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (0, 0), bg),
+                ("TOPPADDING", (0, 0), (0, 0), 4),
+                ("BOTTOMPADDING", (0, 0), (0, 0), 4),
+                ("LEFTPADDING", (0, 0), (0, 0), 8),
+                ("RIGHTPADDING", (0, 0), (0, 0), 8),
+            ]))
+            story.append(traj_badge)
+            story.append(Spacer(1, 6))
+
+        if projection.get("summary"):
+            story.append(_p(projection["summary"], "exec_body"))
+
+        proj_rows = []
+        for label, key, fmt_fn in [
+            ("Projected Spend (30d)",       "projected_spend",       _money),
+            ("Projected Conversions (30d)", "projected_conversions", _num),
+            ("Projected CPA",               "projected_cpa",         _money),
+            ("Projected ROAS",              "projected_roas",        lambda v: f"{_f(v):.2f}x" if v else "—"),
+        ]:
+            val = projection.get(key)
+            if val is not None:
+                proj_rows.append([_p(label, "cell_bold"), _p(fmt_fn(val), "cell_num")])
+
+        if proj_rows:
+            tbl = Table(proj_rows, colWidths=[CONTENT_W * 0.55, CONTENT_W * 0.45])
+            tbl.setStyle(TableStyle([
+                ("GRID",         (0, 0), (-1, -1), 0.3, GRAY_MID),
+                ("BACKGROUND",   (0, 0), (-1, -1), GRAY_LIGHT),
+                ("TOPPADDING",   (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING",(0, 0), (-1, -1), 4),
+                ("LEFTPADDING",  (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+            ]))
+            story.append(tbl)
+            story.append(Spacer(1, 6))
+
+        drivers = projection.get("key_drivers", [])
+        if drivers:
+            story += sub_header("Key Drivers")
+            for d in drivers:
+                story.append(_p(f"• {_safe_xml(str(d))}", "body_sm"))
+                story.append(Spacer(1, 2))
+
+        for label, key in [("Upside Scenario", "upside_scenario"), ("Downside Scenario", "downside_scenario")]:
+            val = projection.get(key, "")
+            if val:
+                story += sub_header(label)
+                story.append(_p(str(val), "body_sm"))
+                story.append(Spacer(1, 4))
+
+        conf = projection.get("confidence", "")
+        conf_note = projection.get("confidence_note", "")
+        if conf:
+            conf_text = f"Confidence: {conf.upper()}"
+            if conf_note:
+                conf_text += f" — {conf_note}"
+            story.append(_p(conf_text, "gray"))
+
+    # Implementation Plan — Next 30 Days
+    action_plan = analysis.get("action_plan", {})
+    if action_plan and isinstance(action_plan, dict):
+        story += section_header("IMPLEMENTATION PLAN — NEXT 30 DAYS")
+
+        if action_plan.get("executive_brief"):
+            story.append(_p(action_plan["executive_brief"], "exec_body"))
+
+        campaigns_to_create = action_plan.get("campaigns_to_create", [])
+        if campaigns_to_create:
+            story += sub_header("Campaigns to Create")
+            headers = ["#", "Campaign", "Audience", "Budget", "Expected Result"]
+            col_w = [0.25 * inch, 1.50 * inch, 1.80 * inch, 0.70 * inch, 2.75 * inch]
+            rows = []
+            for c in campaigns_to_create:
+                rows.append([
+                    _p(str(c.get("priority", "")), "cell_bold"),
+                    _p(_trunc(str(c.get("name", "—")), 30), "cell_bold"),
+                    _p(_trunc(str(c.get("audience", "—")), 45), "cell"),
+                    _p(_trunc(str(c.get("daily_budget", "—")), 12), "cell"),
+                    _p(_trunc(str(c.get("expected_result", "—")), 65), "cell"),
+                ])
+            story.append(make_table(headers, rows, col_w))
+            story.append(Spacer(1, 6))
+
+            for c in campaigns_to_create:
+                cd = c.get("creative_direction", "")
+                if cd:
+                    name = c.get("name", "")
+                    prefix = f"<b>{_safe_xml(str(name))}:</b> " if name else ""
+                    card = Table([[_p(f"{prefix}{_safe_xml(str(cd))}", "body_sm")]],
+                                 colWidths=[CONTENT_W])
+                    card.setStyle(TableStyle([
+                        ("BACKGROUND",    (0, 0), (0, 0), BLUE_BG),
+                        ("TOPPADDING",    (0, 0), (0, 0), 6),
+                        ("BOTTOMPADDING", (0, 0), (0, 0), 6),
+                        ("LEFTPADDING",   (0, 0), (0, 0), 10),
+                        ("RIGHTPADDING",  (0, 0), (0, 0), 10),
+                    ]))
+                    story.append(card)
+                    story.append(Spacer(1, 3))
+
+        for section_label, key in [
+            ("Campaigns to Cut",    "campaigns_to_cut"),
+            ("Audiences to Build",  "audiences_to_build"),
+            ("Budget Moves",        "budget_moves"),
+        ]:
+            items = action_plan.get(key, [])
+            if items:
+                story += sub_header(section_label)
+                for i, item in enumerate(items, start=1):
+                    text = str(item)
+                    story.append(Paragraph(f"<b>{i}.</b>  {_safe_xml(text)}", STYLES["action_body"]))
+                    story.append(Spacer(1, 3))
+
+        week_by_week = action_plan.get("week_by_week", [])
+        if week_by_week:
+            story += sub_header("Week-by-Week Roadmap")
+            headers = ["Week", "Actions"]
+            col_w = [0.80 * inch, CONTENT_W - 0.80 * inch]
+            rows = []
+            for week_data in week_by_week:
+                week_label = week_data.get("week", "")
+                actions = week_data.get("actions", [])
+                actions_text = "  •  ".join(str(a) for a in actions) if actions else "—"
+                rows.append([_p(str(week_label), "cell_bold"), _p(actions_text, "cell")])
+            story.append(make_table(headers, rows, col_w))
+
     return story
 
 

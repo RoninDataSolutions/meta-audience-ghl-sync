@@ -54,6 +54,18 @@ GENERIC_ACTIONS = {
     "post_reaction",
 }
 
+def _format_contexts(contexts: list[dict]) -> str | None:
+    """Format audit_contexts list into a single string for the AI prompt."""
+    parts = []
+    for c in (contexts or []):
+        text = (c.get("text") or "").strip()
+        if not text:
+            continue
+        added_at = (c.get("added_at") or "")[:10]
+        parts.append(f"[{added_at}] {text}" if added_at else text)
+    return "\n\n".join(parts) or None
+
+
 INSIGHT_FIELDS = (
     "campaign_name,campaign_id,adset_name,adset_id,ad_name,ad_id,objective,"
     "spend,impressions,reach,clicks,cpc,cpm,ctr,frequency,"
@@ -71,12 +83,16 @@ You will receive structured performance data for 7-day, 30-day, 60-day, and 90-d
 IMPORTANT — Business Context:
 The payload may contain a "business_context" key with the following enrichment data. USE THIS to make grounded, specific assessments:
 - "profile": manually entered business info — industry, target customer, avg order value, primary goal. Use this to benchmark CPA, ROAS, and CTR against realistic expectations for the business type.
+- "business_notes": FREE-TEXT NOTES describing how this business actually works. THIS IS CRITICAL GROUND TRUTH — treat it as authoritative. It may describe the pricing model (e.g. packages vs subscriptions vs one-time), the customer repurchase cycle, retention mechanics, offer structure, seasonality, upsell paths, customer lifetime journey, or nuances not captured in the structured profile fields. If it says customers buy packages and repurchase when they expire, factor this directly into CPA targets (the real LTV is multi-purchase), audience strategy (lapsed customers = high-value retargeting pool), and retention recommendations. If it describes seasonality, weight projections accordingly. Never ignore this field.
+- "report_context": NOTES SPECIFIC TO THIS AUDIT PERIOD — what happened, what changed, what was launched. Use this to explain metric anomalies, contextualize this period's performance, and ground period-specific projections. If a flash sale ran, CPA will be abnormally low. If an instructor left, retention metrics may dip. Always reference this context when present.
 - "website": scraped from the business website — title, meta description, headings, pricing found, CTAs, platform (Shopify, Kajabi, etc.). Use this to assess landing page/ad message alignment and price-point context.
 - "page_stats": the business's own Facebook page — follower count, rating, posting frequency. Flag if the page is thin or inactive relative to ad spend.
 - "own_ad_library": their currently active ads in the Meta Ad Library — total count, oldest running ad (long-running = proven winner or fatigue risk). Flag zombie ads.
 - "competitor_ads": active ads from competitor pages. Note format, messaging, and creative patterns the competition is using. Identify gaps or opportunities.
+- "conversation_insights": patterns extracted from real pre-sale Instagram DM and WhatsApp conversations (last 60 days). Contains top_questions prospects ask, top_objections, conversion_signals that indicate readiness to book, and messaging_gaps where ad messaging doesn't match what prospects actually need to know before converting. This is ground-truth prospect voice data — treat it as highly authoritative. Use it to evaluate whether ad copy addresses real concerns, recommend specific CTA and messaging changes, and identify friction in the pre-sale funnel. If ads promise something prospects never ask about but do ask about pricing or schedule, that's a messaging alignment problem.
+- "ltv_insights": customer lifetime value from the CRM. Contains median/avg LTV, distribution (p25/p75), and cohort_trend showing how LTV changes month-over-month for customers acquired in different periods. Since ~100% of customers come from Meta, this IS Meta acquisition quality. Use it to: calibrate CPA targets (if median LTV is $400, a $60 CPA is a 6.7x return — factor this into whether CPA is actually good or bad), flag if recent cohorts show declining LTV even if CPA looks stable (acquiring cheaper but lower-quality customers), and note the trend direction in your projections.
 
-When business_context is present, integrate it throughout your analysis — don't summarize it separately. Cite actual prices, CTAs, page follower counts, and competitor observations inline.
+When business_context is present, integrate it throughout your analysis — don't summarize it separately. Cite actual prices, CTAs, page follower counts, competitor observations, and business model specifics inline. The business_notes and report_context fields in particular should visibly shape your campaign recommendations, CPA benchmarks, audience strategy, and projections.
 
 Key fields to understand:
 - "objective": the Meta campaign objective (OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_TRAFFIC, etc.)
@@ -163,8 +179,46 @@ Produce a thorough intelligence report in the following JSON structure (no markd
         "frequency_trends": "Which campaigns/adsets show accelerating frequency? How close are they to fatigue thresholds?"
     },
     "risk_flags": ["..."],
-    "priority_actions": ["Top 5 ordered actions to take this week, with expected impact for each"]
+    "priority_actions": ["Top 5 ordered actions to take this week, with expected impact for each"],
+    "projection_30d": {
+        "trajectory": "improving | declining | stable | volatile",
+        "summary": "2-3 sentence forward-looking outlook for the next 30 days based on current momentum. Ground this in the 7d-vs-30d direction and the 30d-vs-60d-vs-90d trend slope.",
+        "projected_spend": 1500.00,
+        "projected_conversions": 45,
+        "projected_cpa": 33.33,
+        "projected_roas": 2.80,
+        "key_drivers": ["The 1-3 factors most influencing this projection — cite specific campaigns or trends"],
+        "upside_scenario": "Best case outcome if you execute the top 2-3 recommendations this week",
+        "downside_scenario": "Likely outcome if current weak points go unaddressed for 30 days",
+        "confidence": "high | medium | low",
+        "confidence_note": "Why — thin data, high volatility, recent structural changes, strong trend signal, etc."
+    },
+    "action_plan": {
+        "executive_brief": "1-2 paragraph concrete implementation directive for the next 30 days. Be prescriptive. Reference the business context (industry, primary goal, AOV, target customer) if available.",
+        "campaigns_to_create": [
+            {
+                "priority": 1,
+                "name": "Suggested campaign name",
+                "objective": "OUTCOME_LEADS | OUTCOME_SALES | OUTCOME_TRAFFIC | ...",
+                "audience": "Specific audience — who, how to build it (custom audience, lookalike, interest), sizing estimate",
+                "daily_budget": "$X/day",
+                "creative_direction": "Specific format, messaging angle, visual concept, and CTA. Reference the business product/service and target customer if known.",
+                "expected_result": "~X leads/purchases at $Y CPA based on this account's current benchmarks"
+            }
+        ],
+        "campaigns_to_cut": ["Campaign Name — specific reason it should pause or stop immediately"],
+        "audiences_to_build": ["Specific audience with build instructions and why it will improve performance"],
+        "budget_moves": ["Reallocate $X/day from [Campaign A] to [Campaign B] — rationale tied to specific performance data"],
+        "week_by_week": [
+            {"week": "Week 1", "actions": ["Specific action", "Specific action"]},
+            {"week": "Week 2", "actions": ["Specific action"]},
+            {"week": "Week 3", "actions": ["Specific action"]},
+            {"week": "Week 4", "actions": ["Specific action"]}
+        ]
+    }
 }
+
+Note: for projected_spend, projected_conversions, projected_cpa, projected_roas — use null (JSON null) if there is insufficient data to project, not 0. campaigns_to_create should have 1-3 entries maximum, each highly specific to this account's business and gaps.
 
 Be specific — cite campaign names, ad set names, ad names, creative formats, placement names, demographic segments, and actual numbers throughout. Don't hedge. Give clear, actionable direction. If data is thin for any section, say so explicitly and explain what it means for the analysis."""
 
@@ -888,7 +942,7 @@ async def analyze_with_claude(payload_str: str, api_key: str) -> dict:
                 },
                 json={
                     "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 8192,
+                    "max_tokens": 12000,
                     "system": AUDIT_SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": payload_str}],
                 },
@@ -915,7 +969,7 @@ async def analyze_with_openai(payload_str: str, api_key: str) -> dict:
                 },
                 json={
                     "model": "gpt-4o",
-                    "max_tokens": 8192,
+                    "max_tokens": 12000,
                     "messages": [
                         {"role": "system", "content": AUDIT_SYSTEM_PROMPT},
                         {"role": "user", "content": payload_str},
@@ -995,6 +1049,219 @@ def _truncate_payload(payload: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# GHL enrichment — conversations + LTV
+# ---------------------------------------------------------------------------
+
+
+async def fetch_conversation_insights(days: int = 60) -> dict:
+    """
+    Pull recent pre-sale IG/WhatsApp/Facebook conversations from GHL,
+    anonymize them, then summarize patterns via a lightweight Claude Haiku call.
+    Returns structured insights with no PII.
+    """
+    if not settings.GHL_API_KEY or not settings.GHL_LOCATION_ID:
+        return {"error": "GHL not configured"}
+    if not settings.CLAUDE_API_KEY:
+        return {"error": "Claude API key required for summarization"}
+
+    from api.ghl_client import fetch_conversations, fetch_conversation_messages
+
+    conversations = await fetch_conversations(days=days, max_count=120)
+    if not conversations:
+        return {"error": "No recent pre-sale conversations found", "sample_size": 0}
+
+    channel_counts: dict[str, int] = {}
+    for c in conversations:
+        ch = c.get("lastMessageType", "unknown").replace("TYPE_", "").lower()
+        channel_counts[ch] = channel_counts.get(ch, 0) + 1
+
+    # Fetch messages concurrently in batches of 15
+    async def _safe_messages(conv: dict) -> list[dict]:
+        try:
+            return await fetch_conversation_messages(conv["id"], limit=20)
+        except Exception:
+            return []
+
+    all_threads: list[tuple[dict, list[dict]]] = []
+    batch_size = 15
+    for i in range(0, len(conversations), batch_size):
+        batch = conversations[i:i + batch_size]
+        results = await asyncio.gather(*[_safe_messages(c) for c in batch])
+        for conv, msgs in zip(batch, results):
+            if msgs:
+                all_threads.append((conv, msgs))
+        if i + batch_size < len(conversations):
+            await asyncio.sleep(0.3)
+
+    # Build anonymized corpus — strip names, keep message content only
+    corpus_parts: list[str] = []
+    for conv, msgs in all_threads[:70]:
+        inbound = [m for m in msgs if m.get("direction") == "inbound" and (m.get("body") or "").strip()]
+        if not inbound:
+            continue
+        channel = conv.get("lastMessageType", "").replace("TYPE_", "").lower()
+        lines = [f"[{channel}]"]
+        for m in msgs:
+            direction = "prospect" if m.get("direction") == "inbound" else "business"
+            body = (m.get("body") or "").strip()
+            if body and len(body) < 600:
+                lines.append(f"{direction}: {body}")
+        if len(lines) > 2:
+            corpus_parts.append("\n".join(lines))
+
+    if not corpus_parts:
+        return {"error": "No usable conversation content", "sample_size": 0}
+
+    summary_prompt = (
+        f"You are analyzing {len(corpus_parts)} pre-sale conversations from a yoga studio's "
+        f"Instagram DM and WhatsApp inbox (last {days} days). "
+        "These are real conversations between prospects and the business. "
+        "Extract patterns only — do not reference specific names or personal details.\n\n"
+        "Conversations:\n"
+        + "\n\n---\n\n".join(corpus_parts[:60])[:14000]
+        + "\n\nReturn ONLY a JSON object with these fields:\n"
+        '{"top_questions": [5-8 most common questions prospects ask],'
+        '"top_objections": [3-6 objections or hesitations],'
+        '"conversion_signals": [3-6 phrases/patterns that indicate a prospect is ready to book],'
+        '"messaging_gaps": [2-4 things prospects are confused about that ads should clarify upfront],'
+        '"avg_messages_before_booking": estimated number or null,'
+        '"channel_notes": one sentence on how IG vs WhatsApp usage differs,'
+        '"overall_sentiment": one sentence on general prospect tone and readiness}'
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": settings.CLAUDE_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": summary_prompt}],
+                },
+            )
+            resp.raise_for_status()
+            text = resp.json()["content"][0]["text"].strip()
+            if "```" in text:
+                text = text.split("```")[1].lstrip("json").strip()
+            insights = json.loads(text)
+            insights["sample_size"] = len(corpus_parts)
+            insights["channel_breakdown"] = channel_counts
+            insights["date_range_days"] = days
+            return insights
+    except Exception as e:
+        logger.error(f"Conversation insights summarization failed: {e}")
+        return {
+            "error": str(e)[:200],
+            "sample_size": len(corpus_parts),
+            "channel_breakdown": channel_counts,
+        }
+
+
+async def fetch_ltv_insights(days_back: int = 180) -> dict:
+    """
+    Pull contacts with LTV populated from GHL and compute distribution + cohort trends.
+    Since ~100% of contacts come from Meta, this is effectively Meta customer LTV.
+    """
+    if not settings.GHL_API_KEY or not settings.GHL_LOCATION_ID:
+        return {"error": "GHL not configured"}
+
+    from api.ghl_client import get_custom_fields, get_all_contacts
+    from datetime import timezone, timedelta
+    from collections import defaultdict
+    import statistics
+
+    # Find LTV field UUID
+    try:
+        fields = await get_custom_fields()
+        ltv_field = next((f for f in fields if f.get("fieldKey") == "contact.ltv"), None)
+        if not ltv_field:
+            return {"error": "LTV custom field (contact.ltv) not found in GHL"}
+        ltv_field_id = ltv_field["id"]
+    except Exception as e:
+        return {"error": f"Could not fetch custom fields: {e}"}
+
+    try:
+        contacts = await get_all_contacts()
+    except Exception as e:
+        return {"error": f"Could not fetch contacts: {e}"}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    ltv_data: list[tuple[datetime, float]] = []
+
+    for c in contacts:
+        date_str = c.get("dateAdded") or c.get("createdAt") or ""
+        try:
+            created = datetime.fromisoformat(date_str.replace("Z", "+00:00")) if date_str else None
+        except Exception:
+            created = None
+
+        if created and created < cutoff:
+            continue
+
+        for f in c.get("customFields", []):
+            if f.get("id") == ltv_field_id:
+                try:
+                    val = float(str(f.get("value") or "0").replace(",", "").replace("$", ""))
+                    if val > 0 and created:
+                        ltv_data.append((created, val))
+                except Exception:
+                    pass
+                break
+
+    if not ltv_data:
+        return {"sample_size": 0, "note": "No contacts with LTV data in the analysis window"}
+
+    values = sorted(v for _, v in ltv_data)
+    n = len(values)
+    median_ltv = statistics.median(values)
+    avg_ltv = statistics.mean(values)
+    p25 = values[max(0, n // 4)]
+    p75 = values[min(n - 1, (3 * n) // 4)]
+
+    # Monthly cohorts
+    cohorts: dict[str, list[float]] = defaultdict(list)
+    for created, val in ltv_data:
+        cohorts[created.strftime("%Y-%m")].append(val)
+
+    cohort_trend = []
+    for month in sorted(cohorts.keys()):
+        vals = sorted(cohorts[month])
+        cohort_trend.append({
+            "month": month,
+            "count": len(vals),
+            "median_ltv": round(statistics.median(vals), 2),
+            "avg_ltv": round(statistics.mean(vals), 2),
+        })
+
+    trend = "insufficient_data"
+    if len(cohort_trend) >= 3:
+        recent = [c["median_ltv"] for c in cohort_trend[-3:]]
+        if recent[-1] > recent[0] * 1.1:
+            trend = "improving"
+        elif recent[-1] < recent[0] * 0.9:
+            trend = "declining"
+        else:
+            trend = "stable"
+
+    return {
+        "sample_size": n,
+        "median_ltv": round(median_ltv, 2),
+        "avg_ltv": round(avg_ltv, 2),
+        "ltv_p25": round(p25, 2),
+        "ltv_p75": round(p75, 2),
+        "max_ltv": round(max(values), 2),
+        "cohort_trend": cohort_trend,
+        "trend_direction": trend,
+        "analysis_period_days": days_back,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -1004,6 +1271,8 @@ async def build_audit_payload(
     token: str,
     business_profile: dict | None = None,
     website_url: str | None = None,
+    business_notes: str | None = None,
+    report_notes: str | None = None,
 ) -> dict:
     """Fetch all Meta data and return the structured audit payload."""
 
@@ -1163,6 +1432,13 @@ async def build_audit_payload(
         enrichment_tasks.append(scrape_website(website_url))
         enrichment_labels.append("website")
 
+    # GHL enrichment — always run when GHL is configured
+    if settings.GHL_API_KEY and settings.GHL_LOCATION_ID:
+        enrichment_tasks.append(fetch_conversation_insights(days=60))
+        enrichment_labels.append("conversation_insights")
+        enrichment_tasks.append(fetch_ltv_insights(days_back=180))
+        enrichment_labels.append("ltv_insights")
+
     if enrichment_tasks:
         enrichment_results = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
         business_context: dict = {}
@@ -1193,6 +1469,15 @@ async def build_audit_payload(
             }
         }
 
+    # Inject business_notes and report_context into business_context
+    if business_notes or report_notes:
+        if "business_context" not in payload:
+            payload["business_context"] = {}
+        if business_notes:
+            payload["business_context"]["business_notes"] = business_notes
+        if report_notes:
+            payload["business_context"]["report_context"] = report_notes
+
     payload = _truncate_payload(payload)
     return payload
 
@@ -1205,6 +1490,8 @@ async def run_audit(
     models_to_run: list[str],
     business_profile: dict | None = None,
     website_url: str | None = None,
+    business_notes: str | None = None,
+    report_notes: str | None = None,
 ) -> None:
     """Full audit workflow. Updates AuditReport row when done."""
     try:
@@ -1214,6 +1501,8 @@ async def run_audit(
             account_id, token,
             business_profile=business_profile,
             website_url=website_url,
+            business_notes=business_notes,
+            report_notes=report_notes,
         )
 
         # 2. Serialize payload
@@ -1375,5 +1664,151 @@ async def run_audit(
         if report:
             report.status = "failed"
             report.error_message = str(e)
+            db.commit()
+        raise
+
+
+async def reanalyze_audit(
+    report_id: int,
+    db: Any,
+    models_to_run: list[str],
+    business_profile: dict | None = None,
+    business_notes: str | None = None,
+) -> None:
+    """Re-run AI analysis on existing stored raw_metrics. No Meta API calls."""
+    report = db.query(AuditReport).filter(AuditReport.id == report_id).first()
+    old_analyses = dict(report.analyses or {}) if report else {}
+
+    try:
+        if not report or not report.raw_metrics:
+            raise ValueError(f"Report {report_id} has no stored metrics to re-analyze")
+
+        # 1. Start from stored payload, rebuild business_context from current account data
+        payload = dict(report.raw_metrics)
+        existing_bc = payload.get("business_context", {})
+
+        business_context: dict = {}
+
+        bp = business_profile or {}
+        if bp:
+            business_context["profile"] = {
+                "industry": bp.get("industry", ""),
+                "description": bp.get("description", ""),
+                "target_customer": bp.get("target_customer", ""),
+                "avg_order_value": bp.get("avg_order_value"),
+                "primary_goal": bp.get("primary_goal", ""),
+            }
+
+        # Preserve enrichment that doesn't need re-fetching
+        for key in ("page_stats", "own_ad_library", "competitor_ads", "website",
+                    "conversation_insights", "ltv_insights"):
+            if key in existing_bc:
+                business_context[key] = existing_bc[key]
+
+        if business_notes:
+            business_context["business_notes"] = business_notes
+        context_str = _format_contexts(list(report.audit_contexts or [])) or report.report_notes
+        if context_str:
+            business_context["report_context"] = context_str
+
+        if business_context:
+            payload["business_context"] = business_context
+
+        # 2. Run AI analyses
+        payload_str = json.dumps(payload)
+        logger.info(
+            f"Reanalysis {report_id}: payload={len(payload_str):,} chars, models={models_to_run}"
+        )
+
+        analysis_tasks: list[Any] = []
+        analysis_labels: list[str] = []
+
+        if "claude" in models_to_run:
+            analysis_tasks.append(analyze_with_claude(payload_str, settings.CLAUDE_API_KEY))
+            analysis_labels.append("claude")
+
+        if "openai" in models_to_run:
+            openai_key = getattr(settings, "OPENAI_API_KEY", "")
+            analysis_tasks.append(analyze_with_openai(payload_str, openai_key))
+            analysis_labels.append("openai")
+
+        analysis_results_raw = await asyncio.gather(*analysis_tasks, return_exceptions=True)
+
+        analyses: dict[str, Any] = {}
+        for label, result in zip(analysis_labels, analysis_results_raw):
+            if isinstance(result, Exception):
+                logger.error(f"Reanalysis {report_id}: {label} raised exception: {result}")
+                analyses[label] = {"error": str(result)}
+            else:
+                analyses[label] = result
+
+        # 3. Previous report for PDF comparison
+        prev_report = (
+            db.query(AuditReport)
+            .filter(
+                AuditReport.account_id == report.account_id,
+                AuditReport.status == "completed",
+                AuditReport.id != report_id,
+            )
+            .order_by(AuditReport.id.desc())
+            .first()
+        )
+
+        # 4. Reuse stored summary stats (Meta data unchanged)
+        metrics = {
+            "total_spend_7d":       float(report.total_spend_7d)       if report.total_spend_7d       else 0,
+            "total_spend_30d":      float(report.total_spend_30d)      if report.total_spend_30d      else 0,
+            "total_conversions_7d": report.total_conversions_7d  or 0,
+            "total_conversions_30d":report.total_conversions_30d or 0,
+            "total_impressions_7d": report.total_impressions_7d  or 0,
+            "total_impressions_30d":report.total_impressions_30d or 0,
+            "total_clicks_7d":      report.total_clicks_7d       or 0,
+            "total_clicks_30d":     report.total_clicks_30d      or 0,
+            "avg_cpa_30d":          float(report.avg_cpa_30d)          if report.avg_cpa_30d          else None,
+            "avg_ctr_30d":          float(report.avg_ctr_30d)          if report.avg_ctr_30d          else None,
+            "avg_roas_30d":         float(report.avg_roas_30d)         if report.avg_roas_30d         else None,
+            "campaign_count":       report.campaign_count  or 0,
+            "audience_count":       report.audience_count  or 0,
+        }
+
+        # 5. Regenerate PDF
+        pdf_bytes = None
+        pdf_filename = None
+        try:
+            from services.audit_pdf import generate_pdf
+            account_name = payload.get("account", {}).get("name", report.account_id)
+            pdf_bytes = generate_pdf(
+                account_name=account_name,
+                metrics=metrics,
+                raw_metrics=payload,
+                analyses=analyses,
+                prev_report=prev_report,
+            )
+            pdf_filename = (
+                f"audit_{report.account_id}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
+            )
+        except Exception as e:
+            logger.error(f"Reanalysis {report_id}: PDF generation failed: {e}")
+
+        # 6. Update report — preserve original generated_at timestamp
+        report.analyses    = analyses
+        report.raw_metrics = payload
+        report.models_used = ",".join(models_to_run)
+        report.status      = "completed"
+        report.error_message = None
+        if pdf_bytes:
+            report.pdf_report  = pdf_bytes
+            report.pdf_filename = pdf_filename
+        db.commit()
+        logger.info(f"Reanalysis {report_id}: completed")
+
+    except Exception as e:
+        logger.error(f"Reanalysis {report_id}: failed: {e}", exc_info=True)
+        # Restore old analyses so the report stays usable
+        report = db.query(AuditReport).filter(AuditReport.id == report_id).first()
+        if report:
+            report.analyses = old_analyses
+            report.status = "completed"
+            report.error_message = f"Re-analysis failed: {str(e)}"
             db.commit()
         raise

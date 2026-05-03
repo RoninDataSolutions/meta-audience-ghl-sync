@@ -108,6 +108,7 @@ export async function updateAccount(
     is_active?: boolean;
     website_url?: string;
     business_profile?: Record<string, unknown>;
+    business_notes?: string;
   }
 ): Promise<AdAccount> {
   return request(`/api/accounts/${id}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -128,6 +129,7 @@ export async function testAccountToken(
 export async function triggerAudit(payload: {
   account_id?: string;
   models?: string[];
+  report_notes?: string;
 }): Promise<{ status: string; report_id: number; account_name: string }> {
   return request("/api/audit/trigger", { method: "POST", body: JSON.stringify(payload) });
 }
@@ -150,4 +152,24 @@ export async function getAuditReport(id: number): Promise<AuditReportDetail> {
 
 export async function deleteAuditReport(id: number): Promise<void> {
   return request(`/api/audit/reports/${id}`, { method: "DELETE" });
+}
+
+export async function reanalyzeAudit(
+  id: number,
+  payload: { models?: string[]; context_text?: string }
+): Promise<{ status: string; report_id: number; models: string[]; message: string }> {
+  return request(`/api/audit/reports/${id}/reanalyze`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function addAuditContext(
+  id: number,
+  text: string
+): Promise<{ audit_contexts: Array<{ text: string; added_at: string }> }> {
+  return request(`/api/audit/reports/${id}/context`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
 }

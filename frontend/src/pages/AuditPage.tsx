@@ -1,11 +1,14 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { AdAccount, AuditReport, AuditReportDetail } from "../types";
+import type { AuditContext } from "../types";
 import {
   getAccounts,
   getAuditReports,
   getAuditReport,
   triggerAudit,
   deleteAuditReport,
+  reanalyzeAudit,
+  addAuditContext,
 } from "../api";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -253,6 +256,268 @@ function ModelAnalysis({ analysis }: { analysis: any }) {
           </ol>
         </AnalysisSection>
       )}
+
+      {analysis.projection_30d && !analysis.projection_30d.error && (
+        <ProjectionSection projection={analysis.projection_30d} />
+      )}
+
+      {analysis.action_plan && !analysis.action_plan.error && (
+        <ActionPlanSection plan={analysis.action_plan} />
+      )}
+    </div>
+  );
+}
+
+// ── 30-Day Projection ────────────────────────────────────────────────────────
+
+const TRAJECTORY_COLORS: Record<string, { bg: string; text: string }> = {
+  improving: { bg: "rgba(16,163,127,0.15)", text: "#10a37f" },
+  declining:  { bg: "rgba(233,69,96,0.15)",  text: "#e94560" },
+  stable:     { bg: "rgba(59,130,246,0.15)", text: "#3b82f6" },
+  volatile:   { bg: "rgba(217,119,6,0.15)",  text: "#d97706" },
+};
+
+function ProjectionSection({ projection }: { projection: any }) {
+  const traj = (projection.trajectory || "").toLowerCase();
+  const colors = TRAJECTORY_COLORS[traj] || { bg: "rgba(255,255,255,0.05)", text: "var(--text-muted)" };
+
+  return (
+    <AnalysisSection title="30-Day Projection">
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+        {traj && (
+          <span style={{
+            background: colors.bg,
+            color: colors.text,
+            padding: "3px 10px",
+            borderRadius: "4px",
+            fontSize: "0.75rem",
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+          }}>
+            {traj}
+          </span>
+        )}
+        {projection.confidence && (
+          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+            Confidence: <strong>{projection.confidence}</strong>
+            {projection.confidence_note ? ` — ${projection.confidence_note}` : ""}
+          </span>
+        )}
+      </div>
+
+      {projection.summary && <p style={{ lineHeight: 1.6, marginBottom: "0.75rem" }}>{projection.summary}</p>}
+
+      {/* Projected metrics */}
+      {(projection.projected_spend != null || projection.projected_conversions != null) && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "0.5rem", marginBottom: "0.75rem" }}>
+          {[
+            { label: "Spend (30d)", value: projection.projected_spend != null ? `$${Number(projection.projected_spend).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null },
+            { label: "Conversions", value: projection.projected_conversions != null ? String(Math.round(projection.projected_conversions)) : null },
+            { label: "CPA",         value: projection.projected_cpa != null ? `$${Number(projection.projected_cpa).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null },
+            { label: "ROAS",        value: projection.projected_roas != null ? `${Number(projection.projected_roas).toFixed(2)}x` : null },
+          ].filter(m => m.value !== null).map(({ label, value }) => (
+            <div key={label} style={{ background: "var(--bg-card, rgba(255,255,255,0.05))", borderRadius: "6px", padding: "0.6rem 0.75rem" }}>
+              <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>{label}</div>
+              <div style={{ fontSize: "1rem", fontWeight: 700 }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {projection.key_drivers?.length > 0 && (
+        <div style={{ marginBottom: "0.75rem" }}>
+          <strong style={{ fontSize: "0.8rem" }}>Key Drivers:</strong>
+          <ul style={{ paddingLeft: "1.25rem", marginTop: "0.25rem", fontSize: "0.85rem" }}>
+            {projection.key_drivers.map((d: string, i: number) => <li key={i}>{d}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {(projection.upside_scenario || projection.downside_scenario) && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+          {projection.upside_scenario && (
+            <div style={{ background: "rgba(16,163,127,0.08)", border: "1px solid rgba(16,163,127,0.2)", borderRadius: "6px", padding: "0.6rem 0.75rem", fontSize: "0.8rem" }}>
+              <div style={{ fontWeight: 600, color: "#10a37f", marginBottom: "0.25rem", fontSize: "0.75rem" }}>↑ UPSIDE</div>
+              {projection.upside_scenario}
+            </div>
+          )}
+          {projection.downside_scenario && (
+            <div style={{ background: "rgba(233,69,96,0.08)", border: "1px solid rgba(233,69,96,0.2)", borderRadius: "6px", padding: "0.6rem 0.75rem", fontSize: "0.8rem" }}>
+              <div style={{ fontWeight: 600, color: "#e94560", marginBottom: "0.25rem", fontSize: "0.75rem" }}>↓ DOWNSIDE</div>
+              {projection.downside_scenario}
+            </div>
+          )}
+        </div>
+      )}
+    </AnalysisSection>
+  );
+}
+
+// ── Implementation Plan ──────────────────────────────────────────────────────
+
+function ActionPlanSection({ plan }: { plan: any }) {
+  return (
+    <AnalysisSection title="Implementation Plan — Next 30 Days">
+      {plan.executive_brief && (
+        <p style={{ lineHeight: 1.6, marginBottom: "1rem" }}>{plan.executive_brief}</p>
+      )}
+
+      {plan.campaigns_to_create?.length > 0 && (
+        <div style={{ marginBottom: "1rem" }}>
+          <h5 style={{ fontSize: "0.8rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-muted)", marginBottom: "0.5rem" }}>
+            Campaigns to Create
+          </h5>
+          {plan.campaigns_to_create.map((c: any, i: number) => (
+            <div key={i} style={{ border: "1px solid var(--border, rgba(255,255,255,0.1))", borderRadius: "6px", padding: "0.75rem", marginBottom: "0.5rem", background: "var(--bg-card, rgba(255,255,255,0.03))" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem", flexWrap: "wrap" }}>
+                <span style={{ background: "#3b82f6", color: "white", borderRadius: "50%", width: "20px", height: "20px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "0.7rem", fontWeight: 700, flexShrink: 0 }}>
+                  {c.priority}
+                </span>
+                <span style={{ fontWeight: 600 }}>{c.name}</span>
+                {c.objective && <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", background: "rgba(255,255,255,0.07)", padding: "1px 6px", borderRadius: "3px" }}>{c.objective}</span>}
+                {c.daily_budget && <span style={{ fontSize: "0.75rem", color: "#10a37f", fontWeight: 600 }}>{c.daily_budget}</span>}
+              </div>
+              {c.audience && <div style={{ fontSize: "0.8rem", marginBottom: "0.3rem" }}><strong>Audience:</strong> {c.audience}</div>}
+              {c.creative_direction && (
+                <div style={{ fontSize: "0.8rem", background: "rgba(59,130,246,0.08)", borderRadius: "4px", padding: "0.4rem 0.6rem", marginBottom: "0.3rem" }}>
+                  <strong>Creative:</strong> {c.creative_direction}
+                </div>
+              )}
+              {c.expected_result && <div style={{ fontSize: "0.8rem", color: "#10a37f" }}>→ {c.expected_result}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {[
+        { label: "Campaigns to Cut",   key: "campaigns_to_cut",   color: "#e94560" },
+        { label: "Audiences to Build", key: "audiences_to_build", color: "#3b82f6" },
+        { label: "Budget Moves",       key: "budget_moves",       color: "#d97706" },
+      ].map(({ label, key, color }) =>
+        plan[key]?.length > 0 ? (
+          <div key={key} style={{ marginBottom: "0.75rem" }}>
+            <h5 style={{ fontSize: "0.8rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-muted)", marginBottom: "0.4rem" }}>{label}</h5>
+            {plan[key].map((item: string, i: number) => (
+              <div key={i} style={{ borderLeft: `3px solid ${color}`, paddingLeft: "0.6rem", marginBottom: "0.3rem", fontSize: "0.85rem" }}>{item}</div>
+            ))}
+          </div>
+        ) : null
+      )}
+
+      {plan.week_by_week?.length > 0 && (
+        <div>
+          <h5 style={{ fontSize: "0.8rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-muted)", marginBottom: "0.5rem" }}>
+            Week-by-Week Roadmap
+          </h5>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "0.5rem" }}>
+            {plan.week_by_week.map((w: any, i: number) => (
+              <div key={i} style={{ background: "var(--bg-card, rgba(255,255,255,0.05))", borderRadius: "6px", padding: "0.6rem 0.75rem" }}>
+                <div style={{ fontWeight: 700, fontSize: "0.75rem", color: "var(--primary, #3b82f6)", marginBottom: "0.35rem", textTransform: "uppercase" }}>{w.week}</div>
+                <ul style={{ paddingLeft: "1rem", margin: 0, fontSize: "0.8rem" }}>
+                  {(w.actions || []).map((a: string, j: number) => <li key={j} style={{ marginBottom: "0.2rem" }}>{a}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </AnalysisSection>
+  );
+}
+
+// ── Audit contexts panel ─────────────────────────────────────────────────────
+
+function AuditContextsPanel({
+  reportId,
+  contexts,
+  legacyNote,
+  onChange,
+}: {
+  reportId: number;
+  contexts: AuditContext[];
+  legacyNote: string | null;
+  onChange: (updated: AuditContext[]) => void;
+}) {
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const allEntries: AuditContext[] = contexts.length > 0
+    ? contexts
+    : legacyNote
+      ? [{ text: legacyNote, added_at: "" }]
+      : [];
+
+  const handleAdd = async () => {
+    if (!text.trim()) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await addAuditContext(reportId, text.trim());
+      setText("");
+      onChange(result.audit_contexts);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: "1.25rem" }}>
+      <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--primary, #3b82f6)", marginBottom: "0.5rem" }}>
+        Audit Context
+      </div>
+
+      {allEntries.length === 0 ? (
+        <div style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+          No context added yet.
+        </div>
+      ) : (
+        <div style={{ marginBottom: "0.75rem" }}>
+          {allEntries.map((c, i) => (
+            <div
+              key={i}
+              style={{
+                background: "rgba(59,130,246,0.06)",
+                border: "1px solid rgba(59,130,246,0.15)",
+                borderRadius: "6px",
+                padding: "0.6rem 0.85rem",
+                marginBottom: "0.4rem",
+                fontSize: "0.85rem",
+                lineHeight: 1.55,
+              }}
+            >
+              {c.added_at && (
+                <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginBottom: "0.2rem" }}>
+                  {new Date(c.added_at).toLocaleString()}
+                </div>
+              )}
+              <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{c.text}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+        <textarea
+          className="form-input"
+          style={{ flex: 1, minHeight: "60px", resize: "vertical", fontSize: "0.85rem" }}
+          placeholder="Add context for this report — what's happening with the business, seasonal notes, recent changes…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={handleAdd}
+          disabled={saving || !text.trim()}
+          style={{ whiteSpace: "nowrap", marginTop: "2px" }}
+        >
+          {saving ? "Saving…" : "+ Add"}
+        </button>
+      </div>
+      {error && <div style={{ color: "var(--danger, #e94560)", fontSize: "0.82rem", marginTop: "0.3rem" }}>{error}</div>}
     </div>
   );
 }
@@ -263,6 +528,11 @@ function ReportDetail({ reportId, onClose }: { reportId: number; onClose: () => 
   const [detail, setDetail] = useState<AuditReportDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeModel, setActiveModel] = useState<string>("");
+  const [contexts, setContexts] = useState<AuditContext[]>([]);
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [reanalyzeError, setReanalyzeError] = useState("");
+
+  const statusRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -270,7 +540,9 @@ function ReportDetail({ reportId, onClose }: { reportId: number; onClose: () => 
       try {
         const d = await getAuditReport(reportId);
         if (!cancelled) {
+          statusRef.current = d.status;
           setDetail(d);
+          setContexts(d.audit_contexts || []);
           const firstModel = Object.keys(d.analyses || {})[0];
           if (firstModel) setActiveModel(firstModel);
         }
@@ -279,12 +551,32 @@ function ReportDetail({ reportId, onClose }: { reportId: number; onClose: () => 
       }
     };
     load();
-    // Poll if still in_progress
-    const interval = setInterval(async () => {
-      if (detail?.status === "in_progress") load();
+    const interval = setInterval(() => {
+      if (statusRef.current === "in_progress") load();
     }, 5000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [reportId]);
+
+  const handleReanalyze = async () => {
+    if (!detail) return;
+    setReanalyzeError("");
+    setReanalyzing(true);
+    try {
+      await reanalyzeAudit(reportId, {
+        models: (detail.models_used || "claude").split(",").map((m) => m.trim()),
+      });
+      setLoading(true);
+      const d = await getAuditReport(reportId);
+      statusRef.current = d.status;
+      setDetail(d);
+      setContexts(d.audit_contexts || []);
+      setLoading(false);
+    } catch (e: any) {
+      setReanalyzeError(e.message);
+    } finally {
+      setReanalyzing(false);
+    }
+  };
 
   if (loading) return <div className="card" style={{ padding: "2rem" }}>Loading report…</div>;
   if (!detail) return null;
@@ -320,6 +612,33 @@ function ReportDetail({ reportId, onClose }: { reportId: number; onClose: () => 
           </div>
         ))}
       </div>
+
+      <AuditContextsPanel
+        reportId={reportId}
+        contexts={contexts}
+        legacyNote={detail.report_notes}
+        onChange={setContexts}
+      />
+
+      {/* Re-analyze controls */}
+      {detail.status !== "in_progress" && (
+        <div style={{ marginBottom: "1.25rem", display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={handleReanalyze}
+            disabled={reanalyzing}
+            title="Re-run AI analysis using stored Meta data — no new API calls"
+          >
+            {reanalyzing ? "Re-analyzing…" : "↺ Re-analyze with current context"}
+          </button>
+          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+            Uses stored Meta data — no new API calls
+          </span>
+          {reanalyzeError && (
+            <span style={{ color: "var(--danger, #e94560)", fontSize: "0.82rem" }}>{reanalyzeError}</span>
+          )}
+        </div>
+      )}
 
       {detail.status === "in_progress" && (
         <div style={{ textAlign: "center", padding: "2rem", color: "var(--text-muted)" }}>
@@ -376,6 +695,8 @@ export default function AuditPage() {
 
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [selectedModels, setSelectedModels] = useState({ claude: true, openai: false });
+  const [reportNotes, setReportNotes] = useState("");
+  const [showReportNotes, setShowReportNotes] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [viewingId, setViewingId] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -415,7 +736,10 @@ export default function AuditPage() {
       const result = await triggerAudit({
         account_id: selectedAccountId || undefined,
         models,
+        report_notes: reportNotes.trim() || undefined,
       });
+      setReportNotes("");
+      setShowReportNotes(false);
       setViewingId(result.report_id);
       loadReports();
     } catch (e: any) {
@@ -508,6 +832,35 @@ export default function AuditPage() {
           >
             {triggering ? "Starting…" : "Run Audit"}
           </button>
+        </div>
+
+        {/* Audit context — collapsible */}
+        <div style={{ marginTop: "0.75rem" }}>
+          <button
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.8rem", color: "var(--text-muted)", padding: 0, display: "flex", alignItems: "center", gap: "0.3rem" }}
+            onClick={() => setShowReportNotes((v) => !v)}
+          >
+            <span style={{ fontSize: "0.7rem" }}>{showReportNotes ? "▼" : "▶"}</span>
+            Add audit context <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>— what happened this period the AI should know about</span>
+          </button>
+          {showReportNotes && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <textarea
+                className="form-input"
+                style={{ minHeight: "90px", resize: "vertical", fontSize: "0.85rem" }}
+                placeholder={
+                  "e.g. Launched a 10-class intro package at $149 on May 1st. " +
+                  "Ran a 20% flash sale on the 28th — will skew CPA low. " +
+                  "Instructor Maria left; prenatal class count dropped from 4 to 3/week."
+                }
+                value={reportNotes}
+                onChange={(e) => setReportNotes(e.target.value)}
+              />
+              <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
+                Saved with this report. Used by the AI to explain anomalies and ground period-specific projections.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -92,6 +92,7 @@ export interface AdAccount {
   timezone_name: string | null;
   website_url: string | null;
   business_profile: BusinessProfile;
+  business_notes: string | null;
   created_at: string | null;
 }
 
@@ -125,9 +126,16 @@ export interface AuditReport {
   error_message: string | null;
 }
 
+export interface AuditContext {
+  text: string;
+  added_at: string;
+}
+
 export interface AuditReportDetail extends AuditReport {
   analyses: Record<string, any>;
   raw_metrics: Record<string, any> | null;
+  report_notes: string | null;
+  audit_contexts: AuditContext[] | null;
   comparison: {
     previous_report_id: number;
     previous_generated_at: string;

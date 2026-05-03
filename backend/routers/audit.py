@@ -15,10 +15,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _fmt_contexts(contexts: list[dict]) -> str | None:
+    parts = []
+    for c in (contexts or []):
+        text = (c.get("text") or "").strip()
+        if not text:
+            continue
+        added_at = (c.get("added_at") or "")[:10]
+        parts.append(f"[{added_at}] {text}" if added_at else text)
+    return "\n\n".join(parts) or None
+
+
 class AuditTriggerRequest(BaseModel):
     account_id: str | None = None
     models: list[str] = ["claude"]
     include_comparison: bool = True
+    report_notes: str | None = None
 
 
 def _report_to_dict(report: AuditReport, include_full: bool = False) -> dict:
@@ -47,6 +59,8 @@ def _report_to_dict(report: AuditReport, include_full: bool = False) -> dict:
     if include_full:
         base["analyses"] = report.analyses or {}
         base["raw_metrics"] = report.raw_metrics or {}
+        base["report_notes"] = report.report_notes
+        base["audit_contexts"] = report.audit_contexts or []
     return base
 
 
@@ -75,6 +89,8 @@ async def _run_audit_background(
     models_to_run: list[str],
     business_profile: dict | None = None,
     website_url: str | None = None,
+    business_notes: str | None = None,
+    report_notes: str | None = None,
 ):
     db = SessionLocal()
     try:
@@ -87,6 +103,8 @@ async def _run_audit_background(
             models_to_run=models_to_run,
             business_profile=business_profile,
             website_url=website_url,
+            business_notes=business_notes,
+            report_notes=report_notes,
         )
     except Exception as e:
         logger.error(f"Background audit {report_id} failed: {e}", exc_info=True)
@@ -116,11 +134,20 @@ async def trigger_audit(payload: AuditTriggerRequest, db: Session = Depends(get_
     account_record = db.query(AdAccount).filter(AdAccount.account_id == account_id).first()
     account_name = account_record.account_name if account_record else account_id
 
+    initial_contexts = []
+    if payload.report_notes and payload.report_notes.strip():
+        initial_contexts = [{
+            "text": payload.report_notes.strip(),
+            "added_at": datetime.now(timezone.utc).isoformat(),
+        }]
+
     report = AuditReport(
         account_id=account_id,
         status="in_progress",
         analyses={},
         models_used=",".join(models_to_run),
+        report_notes=payload.report_notes or None,
+        audit_contexts=initial_contexts or None,
     )
     db.add(report)
     db.commit()
@@ -133,10 +160,14 @@ async def trigger_audit(payload: AuditTriggerRequest, db: Session = Depends(get_
 
     business_profile = account_record.business_profile if account_record else None
     website_url = account_record.website_url if account_record else None
+    business_notes = account_record.business_notes if account_record else None
+    formatted_notes = _fmt_contexts(report.audit_contexts)
     asyncio.create_task(_run_audit_background(
         report.id, account_id, token, models_to_run,
         business_profile=business_profile,
         website_url=website_url,
+        business_notes=business_notes,
+        report_notes=formatted_notes,
     ))
 
     return {
@@ -315,6 +346,85 @@ def regenerate_pdf(report_id: int, db: Session = Depends(get_db)):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{report.pdf_filename}"'},
     )
+
+
+class ReanalyzeRequest(BaseModel):
+    models: list[str] = ["claude"]
+    context_text: str | None = None
+
+
+async def _reanalyze_background(report_id: int, models_to_run: list[str]):
+    db = SessionLocal()
+    try:
+        from services.meta_audit import reanalyze_audit
+        await reanalyze_audit(report_id=report_id, db=db, models_to_run=models_to_run)
+    except Exception as e:
+        logger.error(f"Background reanalysis {report_id} failed: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+@router.post("/audit/reports/{report_id}/reanalyze")
+async def reanalyze_report(
+    report_id: int,
+    payload: ReanalyzeRequest,
+    db: Session = Depends(get_db),
+):
+    report = db.query(AuditReport).filter(AuditReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if report.status == "in_progress":
+        raise HTTPException(status_code=409, detail="Report is already being processed")
+    if not report.raw_metrics:
+        raise HTTPException(status_code=400, detail="No stored metrics to re-analyze")
+
+    valid_models = {"claude", "openai"}
+    models_to_run = [m for m in payload.models if m in valid_models]
+    if "claude" not in models_to_run:
+        models_to_run = ["claude"] + models_to_run
+
+    if "openai" in models_to_run and not settings.OPENAI_API_KEY:
+        models_to_run = [m for m in models_to_run if m != "openai"]
+
+    if payload.context_text and payload.context_text.strip():
+        now = datetime.now(timezone.utc).isoformat()
+        contexts = list(report.audit_contexts or [])
+        contexts.append({"text": payload.context_text.strip(), "added_at": now})
+        report.audit_contexts = contexts
+
+    report.status = "in_progress"
+    report.error_message = None
+    db.commit()
+
+    asyncio.create_task(_reanalyze_background(report_id, models_to_run))
+
+    return {
+        "status": "started",
+        "report_id": report_id,
+        "models": models_to_run,
+        "message": f"Re-analysis started. Poll /api/audit/reports/{report_id} for status.",
+    }
+
+
+class AddContextRequest(BaseModel):
+    text: str
+
+
+@router.post("/audit/reports/{report_id}/context")
+def add_audit_context(report_id: int, payload: AddContextRequest, db: Session = Depends(get_db)):
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Context text cannot be empty")
+    report = db.query(AuditReport).filter(AuditReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    now = datetime.now(timezone.utc).isoformat()
+    contexts = list(report.audit_contexts or [])
+    contexts.append({"text": payload.text.strip(), "added_at": now})
+    report.audit_contexts = contexts
+    db.commit()
+
+    return {"audit_contexts": contexts}
 
 
 @router.delete("/audit/reports/{report_id}")

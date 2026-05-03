@@ -124,7 +124,7 @@ def send_audit_email(
         <tr><th>Metric</th><th>7 Days</th><th>30 Days</th></tr>
         <tr><td>Spend</td><td>${spend_7d:,.2f}</td><td>${spend_30d:,.2f}</td></tr>
         <tr><td>Conversions</td><td>{metrics.get('total_conversions_7d', '—')}</td><td>{conv_30d}</td></tr>
-        <tr><td>CPA</td><td>—</td><td>${cpa_30d:,.2f if cpa_30d else '—'}</td></tr>
+        <tr><td>CPA</td><td>—</td><td>{f'${cpa_30d:,.2f}' if cpa_30d else '—'}</td></tr>
         <tr><td>ROAS</td><td>—</td><td>{f'{roas_30d:.2f}x' if roas_30d else '—'}</td></tr>
     </table>
     <p>Full report attached as PDF. Report ID: {report_id}</p>
