@@ -694,7 +694,7 @@ export default function AuditPage() {
   const limit = 10;
 
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
-  const [selectedModels, setSelectedModels] = useState({ claude: true, openai: false });
+  const [selectedModels, setSelectedModels] = useState({ claude: true, claude_opus: false, openai: false });
   const [reportNotes, setReportNotes] = useState("");
   const [showReportNotes, setShowReportNotes] = useState(false);
   const [triggering, setTriggering] = useState(false);
@@ -731,6 +731,7 @@ export default function AuditPage() {
     try {
       const models = [
         ...(selectedModels.claude ? ["claude"] : []),
+        ...(selectedModels.claude_opus ? ["claude_opus"] : []),
         ...(selectedModels.openai ? ["openai"] : []),
       ];
       const result = await triggerAudit({
@@ -812,14 +813,19 @@ export default function AuditPage() {
               Models
             </label>
             <div style={{ display: "flex", gap: "0.75rem" }}>
-              {(["claude", "openai"] as const).map((m) => (
-                <label key={m} style={{ display: "flex", alignItems: "center", gap: "0.35rem", cursor: "pointer" }}>
+              {([
+                { key: "claude",      label: "Sonnet",        note: "fast" },
+                { key: "claude_opus", label: "Opus",          note: "deep, slower" },
+                { key: "openai",      label: "GPT-4o",        note: "second opinion" },
+              ] as const).map(({ key, label, note }) => (
+                <label key={key} style={{ display: "flex", alignItems: "center", gap: "0.35rem", cursor: "pointer" }}>
                   <input
                     type="checkbox"
-                    checked={selectedModels[m]}
-                    onChange={(e) => setSelectedModels((s) => ({ ...s, [m]: e.target.checked }))}
+                    checked={selectedModels[key]}
+                    onChange={(e) => setSelectedModels((s) => ({ ...s, [key]: e.target.checked }))}
                   />
-                  <span style={{ textTransform: "capitalize" }}>{m}</span>
+                  <span>{label}</span>
+                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>({note})</span>
                 </label>
               ))}
             </div>
@@ -828,7 +834,7 @@ export default function AuditPage() {
           <button
             className="btn btn-primary"
             onClick={handleTrigger}
-            disabled={triggering || (!selectedModels.claude && !selectedModels.openai)}
+            disabled={triggering || (!selectedModels.claude && !selectedModels.claude_opus && !selectedModels.openai)}
           >
             {triggering ? "Starting…" : "Run Audit"}
           </button>

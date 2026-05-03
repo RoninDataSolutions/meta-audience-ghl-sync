@@ -461,6 +461,8 @@ def _page_executive_brief(analyses: dict, metrics: dict) -> list:
     model_color = INDIGO
     if "openai" in model_label.lower() or "gpt" in model_label.lower():
         model_color = HexColor("#059669")
+    elif "opus" in model_label.lower():
+        model_color = HexColor("#7c3aed")
 
     badge = Table(
         [[_p(f"{model_label.upper()} — EXECUTIVE BRIEF", "badge")]],
@@ -1266,7 +1268,7 @@ def _page_ai_analyses(analyses: dict) -> list:
     if not analyses:
         return story
 
-    model_colors = {"claude": "#4F46E5", "openai": "#059669", "gpt": "#059669"}
+    model_colors = {"opus": "#7c3aed", "claude": "#4F46E5", "openai": "#059669", "gpt": "#059669"}
     first = True
 
     for model_name, analysis in analyses.items():

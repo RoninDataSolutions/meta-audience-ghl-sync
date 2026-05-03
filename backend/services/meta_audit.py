@@ -94,6 +94,23 @@ The payload may contain a "business_context" key with the following enrichment d
 
 When business_context is present, integrate it throughout your analysis — don't summarize it separately. Cite actual prices, CTAs, page follower counts, competitor observations, and business model specifics inline. The business_notes and report_context fields in particular should visibly shape your campaign recommendations, CPA benchmarks, audience strategy, and projections.
 
+CRITICAL — Campaign Objective Recommendations:
+Do NOT default to OUTCOME_LEADS with Meta Lead Forms for every business. Match the campaign objective to the actual business model:
+
+- **DTC / E-commerce / Online services with a website where customers can buy directly** (online yoga, SaaS, courses, e-commerce stores): Recommend OUTCOME_SALES or website conversion campaigns optimized for the Purchase/BookClass/SignUp event on the business website. The customer should land on the website and complete the transaction there. Only recommend lead forms if there is NO website or NO pixel tracking set up — and if so, flag "set up Meta Pixel + Conversions API" as the #1 priority action.
+- **High-ticket B2B / services requiring consultation** (agencies, consultants, contractors with $1K+ deal sizes): OUTCOME_LEADS with lead forms or landing page conversions is appropriate here because the sales cycle requires human follow-up.
+- **Local brick-and-mortar businesses** (restaurants, gyms, salons): OUTCOME_TRAFFIC driving to Google Maps/booking page, or OUTCOME_LEADS for appointment booking forms.
+- **Messaging-first businesses** (businesses that close deals through Instagram DMs or WhatsApp — check conversation_insights for volume): MESSAGES objective with conversation-optimized ads. If conversation_insights shows high messaging volume but low conversion to purchase, recommend adding a direct conversion campaign alongside the messaging campaign, not replacing it.
+- **If the business has an active website** (check the "website" field in business_context): Always consider website conversion campaigns first. Look at what the website offers — if it has pricing pages, booking flows, or checkout, that's where the conversion should happen.
+- **If the business is running OUTCOME_ENGAGEMENT but is a transactional business**: This is almost always wrong. Flag it as a critical misalignment. Engagement campaigns optimize for likes/comments/shares — they do NOT optimize for buyers. Call this out explicitly and recommend switching.
+
+When making campaign recommendations in action_plan.campaigns_to_create, always specify WHY you chose that objective for this specific business. Don't just say "OUTCOME_LEADS" — say "OUTCOME_LEADS because this is a high-ticket service requiring consultation" or "OUTCOME_SALES with website purchase optimization because this business sells $179 packages directly on their website."
+
+CRITICAL — Tactical Recommendations:
+- **Never recommend pausing the only running campaign without a replacement ready.** If the account has a single active campaign, recommend launching the new campaign first, letting it exit Meta's learning phase (50+ optimization events), THEN scaling down the old campaign. Going dark for 1-2 weeks while a new campaign ramps is worse than running a mediocre campaign.
+- **Budget recommendations must be grounded in what the client currently spends.** If current daily spend is $20/day, don't recommend $55/day without explicitly calling out the increase and explaining why unit economics support it (e.g., "with $179 LTV and projected $60 CPA, every $60 spent returns $179 — a 3x return justifies doubling the budget").
+- **Don't recommend more than 2 new campaigns.** A small business running $20/day cannot manage 3-4 new campaigns simultaneously. Be realistic about operational capacity.
+
 Key fields to understand:
 - "objective": the Meta campaign objective (OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_TRAFFIC, etc.)
 - "primary_action": the conversion event this campaign optimizes for (lead, purchase, link_click, etc.)
@@ -957,6 +974,34 @@ async def analyze_with_claude(payload_str: str, api_key: str) -> dict:
         return {"error": str(e)}
 
 
+async def analyze_with_claude_opus(payload_str: str, api_key: str) -> dict:
+    """POST to Anthropic API (claude-opus-4-6). Deeper reasoning for strategic analysis."""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-opus-4-6-20250515",
+                    "max_tokens": 16000,
+                    "system": AUDIT_SYSTEM_PROMPT,
+                    "messages": [{"role": "user", "content": payload_str}],
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            raw_text = data["content"][0]["text"]
+            cleaned = _strip_markdown_fences(raw_text)
+            return json.loads(cleaned)
+    except Exception as e:
+        logger.error(f"Claude Opus analysis failed: {e}")
+        return {"error": str(e)}
+
+
 async def analyze_with_openai(payload_str: str, api_key: str) -> dict:
     """POST to OpenAI API (gpt-4o). Returns parsed JSON or {"error": ...}."""
     try:
@@ -1520,6 +1565,10 @@ async def run_audit(
             analysis_tasks.append(analyze_with_claude(payload_str, settings.CLAUDE_API_KEY))
             analysis_labels.append("claude")
 
+        if "claude_opus" in models_to_run:
+            analysis_tasks.append(analyze_with_claude_opus(payload_str, settings.CLAUDE_API_KEY))
+            analysis_labels.append("claude_opus")
+
         if "openai" in models_to_run:
             openai_key = getattr(settings, "OPENAI_API_KEY", "")
             analysis_tasks.append(analyze_with_openai(payload_str, openai_key))
@@ -1726,6 +1775,10 @@ async def reanalyze_audit(
         if "claude" in models_to_run:
             analysis_tasks.append(analyze_with_claude(payload_str, settings.CLAUDE_API_KEY))
             analysis_labels.append("claude")
+
+        if "claude_opus" in models_to_run:
+            analysis_tasks.append(analyze_with_claude_opus(payload_str, settings.CLAUDE_API_KEY))
+            analysis_labels.append("claude_opus")
 
         if "openai" in models_to_run:
             openai_key = getattr(settings, "OPENAI_API_KEY", "")

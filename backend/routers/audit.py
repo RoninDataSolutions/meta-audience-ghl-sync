@@ -120,7 +120,7 @@ async def trigger_audit(payload: AuditTriggerRequest, db: Session = Depends(get_
         raise HTTPException(status_code=400, detail="No Meta access token configured")
 
     # Validate requested models
-    valid_models = {"claude", "openai"}
+    valid_models = {"claude", "claude_opus", "openai"}
     models_to_run = [m for m in payload.models if m in valid_models]
     if "claude" not in models_to_run:
         models_to_run = ["claude"] + models_to_run  # Claude is always required
@@ -378,7 +378,7 @@ async def reanalyze_report(
     if not report.raw_metrics:
         raise HTTPException(status_code=400, detail="No stored metrics to re-analyze")
 
-    valid_models = {"claude", "openai"}
+    valid_models = {"claude", "claude_opus", "openai"}
     models_to_run = [m for m in payload.models if m in valid_models]
     if "claude" not in models_to_run:
         models_to_run = ["claude"] + models_to_run
