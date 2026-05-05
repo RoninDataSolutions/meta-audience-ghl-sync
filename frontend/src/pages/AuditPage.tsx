@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { AdAccount, AuditReport, AuditReportDetail } from "../types";
 import type { AuditContext } from "../types";
 import {
-  getAccounts,
   getAuditReports,
   getAuditReport,
   triggerAudit,
@@ -562,9 +561,7 @@ function ReportDetail({ reportId, onClose }: { reportId: number; onClose: () => 
     setReanalyzeError("");
     setReanalyzing(true);
     try {
-      await reanalyzeAudit(reportId, {
-        models: (detail.models_used || "claude").split(",").map((m) => m.trim()),
-      });
+      await reanalyzeAudit(reportId, { models: ["claude_opus"] });
       setLoading(true);
       const d = await getAuditReport(reportId);
       statusRef.current = d.status;
@@ -655,25 +652,41 @@ function ReportDetail({ reportId, onClose }: { reportId: number; onClose: () => 
       {/* AI analysis tabs */}
       {modelNames.length > 0 && (
         <div>
-          <div style={{ display: "flex", gap: "0.5rem", borderBottom: "1px solid var(--border, rgba(255,255,255,0.1))", marginBottom: "1.25rem" }}>
-            {modelNames.map((m) => (
-              <button
-                key={m}
-                onClick={() => setActiveModel(m)}
-                style={{
-                  padding: "0.5rem 1rem",
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  borderBottom: activeModel === m ? "2px solid var(--primary, #3b82f6)" : "2px solid transparent",
-                  color: activeModel === m ? "var(--primary, #3b82f6)" : "var(--text-muted)",
-                  fontWeight: activeModel === m ? 600 : 400,
-                  textTransform: "capitalize",
-                }}
-              >
-                {m} Analysis
-              </button>
-            ))}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border, rgba(255,255,255,0.1))", marginBottom: "1.25rem" }}>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {modelNames.map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setActiveModel(m)}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    borderBottom: activeModel === m ? "2px solid var(--primary, #3b82f6)" : "2px solid transparent",
+                    color: activeModel === m ? "var(--primary, #3b82f6)" : "var(--text-muted)",
+                    fontWeight: activeModel === m ? 600 : 400,
+                    textTransform: "capitalize",
+                  }}
+                >
+                  {m.replace("_", " ")} Analysis
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: "0.4rem", paddingBottom: "2px" }}>
+              {modelNames.map((m) => (
+                <a
+                  key={m}
+                  className="btn btn-sm"
+                  href={`/api/audit/reports/${reportId}/pdf?model=${m}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Download PDF for ${m} analysis`}
+                >
+                  {m.replace("_", " ")} PDF
+                </a>
+              ))}
+            </div>
           </div>
           {activeModel && detail.analyses[activeModel] && (
             <ModelAnalysis analysis={detail.analyses[activeModel]} />
@@ -686,15 +699,14 @@ function ReportDetail({ reportId, onClose }: { reportId: number; onClose: () => 
 
 // ── Main page ────────────────────────────────────────────────────────────────
 
-export default function AuditPage() {
-  const [accounts, setAccounts] = useState<AdAccount[]>([]);
+export default function AuditPage({ selectedAccount }: { selectedAccount: AdAccount | null }) {
   const [reports, setReports] = useState<AuditReport[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const limit = 10;
 
-  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
-  const [selectedModels, setSelectedModels] = useState({ claude: true, claude_opus: false, openai: false });
+  const selectedAccountId = selectedAccount?.account_id ?? "";
+
   const [reportNotes, setReportNotes] = useState("");
   const [showReportNotes, setShowReportNotes] = useState(false);
   const [triggering, setTriggering] = useState(false);
@@ -711,11 +723,10 @@ export default function AuditPage() {
     }
   }, [offset, selectedAccountId]);
 
-  useEffect(() => {
-    getAccounts().then((d) => setAccounts(d.accounts)).catch(() => {});
-  }, []);
-
   useEffect(() => { loadReports(); }, [loadReports]);
+
+  // Reset offset when account changes
+  useEffect(() => { setOffset(0); }, [selectedAccountId]);
 
   // Poll while any report is in_progress
   useEffect(() => {
@@ -729,14 +740,9 @@ export default function AuditPage() {
     setError("");
     setTriggering(true);
     try {
-      const models = [
-        ...(selectedModels.claude ? ["claude"] : []),
-        ...(selectedModels.claude_opus ? ["claude_opus"] : []),
-        ...(selectedModels.openai ? ["openai"] : []),
-      ];
       const result = await triggerAudit({
         account_id: selectedAccountId || undefined,
-        models,
+        models: ["claude_opus"],
         report_notes: reportNotes.trim() || undefined,
       });
       setReportNotes("");
@@ -791,50 +797,20 @@ export default function AuditPage() {
         <h2 style={{ marginBottom: "1rem" }}>Run Audit</h2>
         {error && <div className="error-banner" style={{ marginBottom: "1rem" }}>{error}</div>}
 
-        <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div style={{ flex: 1, minWidth: "200px" }}>
-            <label style={{ display: "block", fontSize: "0.85rem", marginBottom: "0.4rem", color: "var(--text-muted)" }}>
-              Account
-            </label>
-            <select
-              className="form-select"
-              value={selectedAccountId}
-              onChange={(e) => setSelectedAccountId(e.target.value)}
-            >
-              <option value="">Default (from .env)</option>
-              {accounts.filter((a) => a.is_active).map((a) => (
-                <option key={a.id} value={a.account_id}>{a.account_name}</option>
-              ))}
-            </select>
+        <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+            Account: <strong style={{ color: "var(--text)" }}>
+              {selectedAccount ? selectedAccount.account_name : "Default (from .env)"}
+            </strong>
+            <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", color: "var(--primary)", opacity: 0.75 }}>
+              · Claude Opus
+            </span>
           </div>
-
-          <div>
-            <label style={{ display: "block", fontSize: "0.85rem", marginBottom: "0.4rem", color: "var(--text-muted)" }}>
-              Models
-            </label>
-            <div style={{ display: "flex", gap: "0.75rem" }}>
-              {([
-                { key: "claude",      label: "Sonnet",        note: "fast" },
-                { key: "claude_opus", label: "Opus",          note: "deep, slower" },
-                { key: "openai",      label: "GPT-4o",        note: "second opinion" },
-              ] as const).map(({ key, label, note }) => (
-                <label key={key} style={{ display: "flex", alignItems: "center", gap: "0.35rem", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedModels[key]}
-                    onChange={(e) => setSelectedModels((s) => ({ ...s, [key]: e.target.checked }))}
-                  />
-                  <span>{label}</span>
-                  <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>({note})</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
           <button
             className="btn btn-primary"
             onClick={handleTrigger}
-            disabled={triggering || (!selectedModels.claude && !selectedModels.claude_opus && !selectedModels.openai)}
+            disabled={triggering}
+            style={{ marginLeft: "auto" }}
           >
             {triggering ? "Starting…" : "Run Audit"}
           </button>

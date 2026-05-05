@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import type { SyncConfig, SyncStatus, SyncRun } from "./types";
-import { getConfig, getSyncStatus, getSyncHistory, triggerSync } from "./api";
+import type { SyncConfig, SyncStatus, SyncRun, AdAccount } from "./types";
+import { getConfig, getSyncStatus, getSyncHistory, triggerSync, getAccounts } from "./api";
 import Header from "./components/Header";
 import ConfigPanel from "./components/ConfigPanel";
 import StatusPanel from "./components/StatusPanel";
@@ -10,8 +10,9 @@ import ValueChart from "./components/ValueChart";
 import EmailSettings from "./components/EmailSettings";
 import AuditPage from "./pages/AuditPage";
 import AccountsPage from "./pages/AccountsPage";
+import ConversionsPage from "./pages/ConversionsPage";
 
-type Tab = "sync" | "audit" | "accounts";
+type Tab = "sync" | "audit" | "conversions" | "accounts";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("sync");
@@ -26,10 +27,14 @@ export default function App() {
   const [totalPages, setTotalPages] = useState(0);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [accounts, setAccounts] = useState<AdAccount[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<AdAccount | null>(null);
+
+  const accountId = selectedAccount?.account_id;
 
   const loadConfig = useCallback(async () => {
     try {
-      const data = await getConfig();
+      const data = await getConfig(accountId);
       setConfig(data.config);
       setMetaAdAccountId(data.meta_ad_account_id);
       setLocationName(data.ghl_location_name || "");
@@ -38,11 +43,11 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load config:", e);
     }
-  }, []);
+  }, [accountId]);
 
   const loadStatus = useCallback(async () => {
     try {
-      const status = await getSyncStatus();
+      const status = await getSyncStatus(accountId);
       setSyncStatus(status);
       if (!status.is_running && syncing) {
         setSyncing(false);
@@ -51,23 +56,32 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load status:", e);
     }
-  }, [syncing]);
+  }, [accountId, syncing]);
 
   const loadHistory = useCallback(async () => {
     try {
-      const data = await getSyncHistory(historyPage);
+      const data = await getSyncHistory(historyPage, accountId);
       setHistory(data.runs);
       setTotalPages(data.total_pages);
     } catch (e) {
       console.error("Failed to load history:", e);
     }
-  }, [historyPage]);
+  }, [historyPage, accountId]);
 
   useEffect(() => {
     loadConfig();
     loadStatus();
     loadHistory();
+    getAccounts().then((d) => setAccounts(d.accounts)).catch(() => {});
   }, []);
+
+  // Reload all sync data when account changes
+  useEffect(() => {
+    setHistoryPage(1);
+    loadConfig();
+    loadStatus();
+    loadHistory();
+  }, [accountId]);
 
   useEffect(() => {
     loadHistory();
@@ -88,7 +102,7 @@ export default function App() {
   const handleSyncNow = async () => {
     try {
       setSyncing(true);
-      await triggerSync();
+      await triggerSync(accountId);
       loadStatus();
     } catch (e: any) {
       alert(e.message);
@@ -108,16 +122,19 @@ export default function App() {
         onSyncNow={handleSyncNow}
         syncing={syncing}
         locationName={locationName}
+        accounts={accounts}
+        selectedAccount={selectedAccount}
+        onSelectAccount={setSelectedAccount}
       />
 
       <nav className="tab-nav">
-        {(["sync", "audit", "accounts"] as Tab[]).map((tab) => (
+        {(["sync", "audit", "conversions", "accounts"] as Tab[]).map((tab) => (
           <button
             key={tab}
             className={`tab-btn${activeTab === tab ? " tab-btn--active" : ""}`}
             onClick={() => setActiveTab(tab)}
           >
-            {tab === "sync" ? "Sync" : tab === "audit" ? "Audit" : "Accounts"}
+            {tab === "sync" ? "Sync" : tab === "audit" ? "Audit" : tab === "conversions" ? "Conversions" : "Accounts"}
           </button>
         ))}
       </nav>
@@ -125,7 +142,7 @@ export default function App() {
       {activeTab === "sync" && (
         <main className="dashboard">
           <div className="dashboard-grid">
-            <ConfigPanel config={config} onSaved={loadConfig} />
+            <ConfigPanel config={config} onSaved={loadConfig} accountId={accountId} />
             <StatusPanel
               lastRun={syncStatus?.last_run || null}
               metaAdAccountId={metaAdAccountId}
@@ -147,8 +164,9 @@ export default function App() {
         </main>
       )}
 
-      {activeTab === "audit" && <AuditPage />}
-      {activeTab === "accounts" && <AccountsPage />}
+      {activeTab === "audit" && <AuditPage selectedAccount={selectedAccount} />}
+      {activeTab === "conversions" && <ConversionsPage selectedAccount={selectedAccount} />}
+      {activeTab === "accounts" && <AccountsPage onAccountsChanged={() => getAccounts().then((d) => setAccounts(d.accounts))} />}
 
       {selectedRunId !== null && (
         <SyncDetailModal

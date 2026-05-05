@@ -74,7 +74,7 @@ const emptyForm = (): FormState => ({
   competitor_page_ids: "",
 });
 
-export default function AccountsPage() {
+export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?: () => void }) {
   const [accounts, setAccounts] = useState<AdAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -153,6 +153,7 @@ export default function AccountsPage() {
         });
         setShowForm(false);
         load();
+        onAccountsChanged?.();
       } else {
         await createAccount({
           account_id: form.account_id,

@@ -131,6 +131,49 @@ export interface AuditContext {
   added_at: string;
 }
 
+// ── Conversions ────────────────────────────────────────────────────────────
+
+export interface ConversionStats {
+  total: number;
+  total_sent: number;
+  total_failed: number;
+  match_rate: number;
+  fbclid_rate: number;
+  capi_success_rate: number;
+  total_revenue_tracked: number;
+}
+
+export interface Conversion {
+  id: number;
+  stripe_session_id: string;
+  stripe_email: string | null;
+  stripe_name: string | null;
+  amount: number;
+  currency: string;
+  ghl_name: string | null;
+  ghl_contact_id: string | null;
+  match_method: string;
+  match_score: number | null;
+  has_fbclid: boolean;
+  capi_status: "pending" | "sent" | "failed" | "skipped";
+  capi_sent_at: string | null;
+  source: string;
+  created_at: string;
+  // full detail fields
+  stripe_customer_id?: string | null;
+  stripe_phone?: string | null;
+  ghl_email?: string | null;
+  ghl_phone?: string | null;
+  ghl_fbclid?: string | null;
+  ghl_fbp?: string | null;
+  ghl_utm_source?: string | null;
+  ghl_utm_medium?: string | null;
+  ghl_utm_campaign?: string | null;
+  capi_event_id?: string | null;
+  capi_response?: Record<string, unknown> | null;
+  capi_error?: string | null;
+}
+
 export interface AuditReportDetail extends AuditReport {
   analyses: Record<string, any>;
   raw_metrics: Record<string, any> | null;

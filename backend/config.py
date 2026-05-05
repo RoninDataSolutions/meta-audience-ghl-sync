@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     META_CAPI_DATASET_ID: str = ""
     META_CAPI_ACCESS_TOKEN: str = ""
     CAPI_EVENT_NAME: str = "evt_complete"
+    CAPI_EVENT_SOURCE_URL: str = ""
 
     # Contact matching
     FUZZY_MATCH_THRESHOLD: int = 82

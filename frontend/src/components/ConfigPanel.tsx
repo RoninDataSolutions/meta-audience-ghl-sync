@@ -5,9 +5,10 @@ import { getCustomFields, saveConfig } from "../api";
 interface Props {
   config: SyncConfig | null;
   onSaved: () => void;
+  accountId?: string;
 }
 
-export default function ConfigPanel({ config, onSaved }: Props) {
+export default function ConfigPanel({ config, onSaved, accountId }: Props) {
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [selectedFieldKey, setSelectedFieldKey] = useState("");
   const [selectedFieldName, setSelectedFieldName] = useState("");
@@ -42,7 +43,7 @@ export default function ConfigPanel({ config, onSaved }: Props) {
         ghl_ltv_field_name: selectedFieldName,
         meta_audience_id: metaAudienceId || undefined,
         meta_lookalike_id: metaLookalikeId || undefined,
-      });
+      }, accountId);
       onSaved();
     } catch (e: any) {
       setError(e.message);

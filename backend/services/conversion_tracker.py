@@ -147,8 +147,10 @@ def build_capi_event(
             "currency": stripe_data["currency"].upper(),
             # Deliberately no content_name / content_category / content_type
         },
-        # Deliberately no event_source_url — no domain association
     }
+
+    if settings.CAPI_EVENT_SOURCE_URL:
+        event["event_source_url"] = settings.CAPI_EVENT_SOURCE_URL
 
     return event, event_id
 

@@ -46,23 +46,33 @@ async def _run_sync_background(config_id: int):
 
 
 @router.post("/sync/trigger")
-async def trigger_sync(db: Session = Depends(get_db)):
+async def trigger_sync(account_id: str | None = None, db: Session = Depends(get_db)):
     if sync_service.is_sync_running():
         raise HTTPException(status_code=409, detail="A sync is already running")
 
-    config = db.query(SyncConfig).order_by(SyncConfig.id.desc()).first()
+    q = db.query(SyncConfig).order_by(SyncConfig.id.desc())
+    if account_id:
+        q = q.filter(SyncConfig.meta_ad_account_id == account_id)
+    config = q.first()
     if not config:
         raise HTTPException(status_code=400, detail="No sync configuration found. Please configure first.")
 
-    # Run in background
     asyncio.create_task(_run_sync_background(config.id))
     return {"message": "Sync triggered", "config_id": config.id}
 
 
 @router.get("/sync/status")
-def get_sync_status(db: Session = Depends(get_db)):
+def get_sync_status(account_id: str | None = None, db: Session = Depends(get_db)):
     running_id = sync_service.get_running_sync_id()
-    last_run = db.query(SyncRun).order_by(SyncRun.id.desc()).first()
+
+    q = db.query(SyncRun).order_by(SyncRun.id.desc())
+    if account_id:
+        config_ids = [
+            c.id for c in db.query(SyncConfig.id)
+            .filter(SyncConfig.meta_ad_account_id == account_id).all()
+        ]
+        q = q.filter(SyncRun.config_id.in_(config_ids))
+    last_run = q.first()
 
     return {
         "is_running": running_id is not None,
@@ -72,15 +82,17 @@ def get_sync_status(db: Session = Depends(get_db)):
 
 
 @router.get("/sync/history")
-def get_sync_history(page: int = 1, per_page: int = 20, db: Session = Depends(get_db)):
-    total = db.query(SyncRun).count()
-    runs = (
-        db.query(SyncRun)
-        .order_by(SyncRun.id.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all()
-    )
+def get_sync_history(page: int = 1, per_page: int = 20, account_id: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(SyncRun)
+    if account_id:
+        config_ids = [
+            c.id for c in db.query(SyncConfig.id)
+            .filter(SyncConfig.meta_ad_account_id == account_id).all()
+        ]
+        q = q.filter(SyncRun.config_id.in_(config_ids))
+
+    total = q.count()
+    runs = q.order_by(SyncRun.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
     return {
         "runs": [_run_to_dict(r) for r in runs],
         "total": total,

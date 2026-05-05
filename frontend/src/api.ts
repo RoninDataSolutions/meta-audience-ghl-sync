@@ -30,43 +30,53 @@ export async function getCustomFields(): Promise<CustomField[]> {
   return data.customFields;
 }
 
-export async function getConfig(): Promise<{
+export async function getConfig(accountId?: string): Promise<{
   config: SyncConfig | null;
   meta_ad_account_id: string;
   ghl_location_name: string;
   smtp_from: string;
   smtp_to: string;
 }> {
-  return request("/api/config");
+  const qs = accountId ? `?account_id=${accountId}` : "";
+  return request(`/api/config${qs}`);
 }
 
-export async function saveConfig(payload: {
-  ghl_ltv_field_key: string;
-  ghl_ltv_field_name: string;
-  meta_audience_id?: string;
-  meta_lookalike_id?: string;
-}): Promise<{ config: SyncConfig }> {
-  return request("/api/config", {
+export async function saveConfig(
+  payload: {
+    ghl_ltv_field_key: string;
+    ghl_ltv_field_name: string;
+    meta_audience_id?: string;
+    meta_lookalike_id?: string;
+  },
+  accountId?: string
+): Promise<{ config: SyncConfig }> {
+  const qs = accountId ? `?account_id=${accountId}` : "";
+  return request(`/api/config${qs}`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export async function triggerSync(): Promise<{
+export async function triggerSync(accountId?: string): Promise<{
   message: string;
   config_id: number;
 }> {
-  return request("/api/sync/trigger", { method: "POST" });
+  const qs = accountId ? `?account_id=${accountId}` : "";
+  return request(`/api/sync/trigger${qs}`, { method: "POST" });
 }
 
-export async function getSyncStatus(): Promise<SyncStatus> {
-  return request("/api/sync/status");
+export async function getSyncStatus(accountId?: string): Promise<SyncStatus> {
+  const qs = accountId ? `?account_id=${accountId}` : "";
+  return request(`/api/sync/status${qs}`);
 }
 
 export async function getSyncHistory(
-  page: number = 1
+  page: number = 1,
+  accountId?: string
 ): Promise<SyncHistory> {
-  return request(`/api/sync/history?page=${page}`);
+  const qs = new URLSearchParams({ page: String(page) });
+  if (accountId) qs.set("account_id", accountId);
+  return request(`/api/sync/history?${qs}`);
 }
 
 export async function getSyncDetail(id: number): Promise<SyncRunDetail> {
@@ -172,4 +182,30 @@ export async function addAuditContext(
     method: "POST",
     body: JSON.stringify({ text }),
   });
+}
+
+// ── Conversions ──────────────────────────────────────────────────────────────
+
+import type { Conversion, ConversionStats } from "./types";
+
+export async function getConversions(params?: {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  source?: string;
+}): Promise<{ conversions: Conversion[]; total: number; stats: ConversionStats }> {
+  const qs = new URLSearchParams();
+  if (params?.limit)  qs.set("limit",  String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.status) qs.set("status", params.status);
+  if (params?.source) qs.set("source", params.source);
+  return request(`/api/conversions?${qs}`);
+}
+
+export async function getConversionDetail(id: number): Promise<Conversion> {
+  return request(`/api/conversions/${id}`);
+}
+
+export async function retryConversion(id: number): Promise<{ status: string; id: number }> {
+  return request(`/api/conversions/${id}/retry`, { method: "POST" });
 }
