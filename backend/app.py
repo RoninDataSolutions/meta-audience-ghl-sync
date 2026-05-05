@@ -28,6 +28,9 @@ def _run_migrations():
     migrations = [
         "ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS website_url TEXT",
         "ALTER TABLE ad_accounts ADD COLUMN IF NOT EXISTS business_profile JSONB",
+        # Conversion tracking tables (create_all handles new tables; these catch column additions)
+        "ALTER TABLE stripe_transactions ADD COLUMN IF NOT EXISTS refunded_amount INTEGER DEFAULT 0",
+        "ALTER TABLE stripe_transactions ADD COLUMN IF NOT EXISTS refund_date TIMESTAMP",
     ]
     with engine.connect() as conn:
         for stmt in migrations:
@@ -59,12 +62,14 @@ from routes.sync_routes import router as sync_router
 from routes.email_routes import router as email_router
 from routers.accounts import router as accounts_router
 from routers.audit import router as audit_router
+from routers.conversions import router as conversions_router
 
 app.include_router(config_router, prefix="/api")
 app.include_router(sync_router, prefix="/api")
 app.include_router(email_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
+app.include_router(conversions_router, prefix="/api")
 
 # Serve frontend static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")

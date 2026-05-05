@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Text, Numeric, ForeignKey, JSON,
-    BigInteger, LargeBinary,
+    BigInteger, LargeBinary, UniqueConstraint,
 )
 from database import Base
 
@@ -114,3 +114,139 @@ class SyncContact(Base):
     normalized_value = Column(Integer, default=0)
     meta_matched = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+# ── Conversion Tracking ──────────────────────────────────────────────────────
+
+
+class StripeTransaction(Base):
+    __tablename__ = "stripe_transactions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Stripe identifiers
+    stripe_payment_id = Column(String(255), nullable=False, unique=True)
+    stripe_customer_id = Column(String(255), nullable=True)
+    stripe_session_id = Column(String(255), nullable=True)
+    stripe_invoice_id = Column(String(255), nullable=True)
+
+    # Customer info
+    customer_email = Column(String(255), nullable=True)
+    customer_phone = Column(String(50), nullable=True)
+    customer_name = Column(String(255), nullable=True)
+
+    # Payment details
+    amount_cents = Column(Integer, nullable=False)
+    currency = Column(String(10), nullable=False, default="usd")
+    status = Column(String(30), nullable=False)
+    payment_method = Column(String(50), nullable=True)
+    stripe_created_at = Column(DateTime, nullable=False)
+
+    # Product details (kept locally — NEVER sent to Meta)
+    line_items = Column(JSON, nullable=True)
+    product_name = Column(String(255), nullable=True)
+    product_id = Column(String(255), nullable=True)
+    price_id = Column(String(255), nullable=True)
+    quantity = Column(Integer, default=1)
+    stripe_metadata = Column(JSON, nullable=True)
+
+    # GHL linkage
+    ghl_contact_id = Column(String(255), nullable=True)
+    match_method = Column(String(30), nullable=True)
+    match_status = Column(String(20), default="pending")
+
+    # Refund tracking
+    refunded_amount = Column(Integer, default=0)
+    refund_date = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ContactLtv(Base):
+    __tablename__ = "contact_ltv"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ghl_contact_id = Column(String(255), nullable=False, unique=True)
+    ghl_name = Column(String(255), nullable=True)
+    ghl_email = Column(String(255), nullable=True)
+
+    total_revenue = Column(Numeric(12, 2), nullable=False, default=0)
+    total_refunds = Column(Numeric(12, 2), nullable=False, default=0)
+    net_revenue = Column(Numeric(12, 2), nullable=False, default=0)
+    transaction_count = Column(Integer, nullable=False, default=0)
+    first_purchase_at = Column(DateTime, nullable=True)
+    last_purchase_at = Column(DateTime, nullable=True)
+    avg_order_value = Column(Numeric(10, 2), nullable=True)
+
+    # Product breakdown (kept locally — NEVER sent to Meta)
+    products_purchased = Column(JSON, default=list)
+
+    days_as_customer = Column(Integer, nullable=True)
+    purchase_frequency = Column(Numeric(6, 2), nullable=True)
+
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MatchedConversion(Base):
+    __tablename__ = "matched_conversions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Stripe side
+    stripe_session_id = Column(String(255), nullable=False, unique=True)
+    stripe_customer_id = Column(String(255), nullable=True)
+    stripe_email = Column(String(255), nullable=True)
+    stripe_phone = Column(String(50), nullable=True)
+    stripe_name = Column(String(255), nullable=True)
+    amount_cents = Column(Integer, nullable=False)
+    currency = Column(String(10), nullable=False, default="usd")
+    stripe_created_at = Column(DateTime, nullable=False)
+
+    # GHL side
+    ghl_contact_id = Column(String(255), nullable=True)
+    ghl_email = Column(String(255), nullable=True)
+    ghl_phone = Column(String(50), nullable=True)
+    ghl_name = Column(String(255), nullable=True)
+    ghl_fbclid = Column(Text, nullable=True)
+    ghl_fbp = Column(Text, nullable=True)
+    ghl_utm_source = Column(String(255), nullable=True)
+    ghl_utm_medium = Column(String(255), nullable=True)
+    ghl_utm_campaign = Column(String(255), nullable=True)
+
+    # Match metadata
+    match_method = Column(String(30), nullable=True)
+    match_score = Column(Integer, nullable=True)
+    match_candidates = Column(JSON, nullable=True)
+
+    # Meta CAPI status
+    capi_status = Column(String(20), nullable=False, default="pending")
+    capi_event_id = Column(String(255), nullable=True)
+    capi_sent_at = Column(DateTime, nullable=True)
+    capi_response = Column(JSON, nullable=True)
+    capi_error = Column(Text, nullable=True)
+
+    source = Column(String(20), nullable=False, default="webhook")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class ContactIdentityMap(Base):
+    __tablename__ = "contact_identity_map"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stripe_customer_id = Column(String(255), nullable=True)
+    stripe_email = Column(String(255), nullable=True)
+    ghl_contact_id = Column(String(255), nullable=False)
+    match_method = Column(String(30), nullable=False)
+    match_score = Column(Integer, nullable=True)
+    confirmed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint("stripe_customer_id", "ghl_contact_id", name="uq_cim_customer_ghl"),
+        UniqueConstraint("stripe_email", "ghl_contact_id", name="uq_cim_email_ghl"),
+    )

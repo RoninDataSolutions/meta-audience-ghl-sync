@@ -49,6 +49,22 @@ class Settings(BaseSettings):
     AUDIT_SCHEDULE_CRON: str = ""
     AUDIT_EMAIL_TO: str = ""
 
+    # Stripe
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+
+    # Meta Conversions API
+    META_CAPI_DATASET_ID: str = ""
+    META_CAPI_ACCESS_TOKEN: str = ""
+    CAPI_EVENT_NAME: str = "evt_complete"
+
+    # Contact matching
+    FUZZY_MATCH_THRESHOLD: int = 82
+
+    # Set to a Meta test event code (e.g. TEST57877) to tag all CAPI events
+    # for the Test Events tab. Remove/leave blank in production.
+    CAPI_TEST_EVENT_CODE: str = ""
+
     @property
     def DATABASE_URL(self) -> str:
         return (
