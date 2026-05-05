@@ -84,6 +84,7 @@ export interface AdAccount {
   account_id: string;
   account_name: string;
   has_custom_token: boolean;
+  has_sm_credentials: boolean;
   notification_email: string | null;
   audit_cron: string | null;
   is_active: boolean;

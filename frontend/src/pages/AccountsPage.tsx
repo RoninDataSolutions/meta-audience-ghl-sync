@@ -6,6 +6,8 @@ import {
   updateAccount,
   deactivateAccount,
   testAccountToken,
+  getCredentialStatus,
+  saveCredentials,
 } from "../api";
 import BusinessProfileWizard from "../components/BusinessProfileWizard";
 
@@ -74,6 +76,94 @@ const emptyForm = (): FormState => ({
   competitor_page_ids: "",
 });
 
+interface CredForm {
+  meta_access_token: string;
+  meta_ad_account_id: string;
+  meta_capi_dataset_id: string;
+  meta_capi_access_token: string;
+  ghl_api_key: string;
+  ghl_location_id: string;
+  ghl_location_name: string;
+  stripe_secret_key: string;
+  stripe_webhook_secret: string;
+  capi_event_source_url: string;
+  capi_event_name: string;
+}
+
+const emptyCredForm = (): CredForm => ({
+  meta_access_token: "",
+  meta_ad_account_id: "",
+  meta_capi_dataset_id: "",
+  meta_capi_access_token: "",
+  ghl_api_key: "",
+  ghl_location_id: "",
+  ghl_location_name: "",
+  stripe_secret_key: "",
+  stripe_webhook_secret: "",
+  capi_event_source_url: "",
+  capi_event_name: "Purchase",
+});
+
+const CRED_LABELS: Record<keyof CredForm, string> = {
+  meta_access_token: "Meta Access Token",
+  meta_ad_account_id: "Meta Ad Account ID",
+  meta_capi_dataset_id: "Meta CAPI Dataset ID",
+  meta_capi_access_token: "Meta CAPI Access Token",
+  ghl_api_key: "GHL API Key",
+  ghl_location_id: "GHL Location ID",
+  ghl_location_name: "GHL Location Name",
+  stripe_secret_key: "Stripe Secret Key",
+  stripe_webhook_secret: "Stripe Webhook Secret",
+  capi_event_source_url: "CAPI Event Source URL",
+  capi_event_name: "CAPI Event Name",
+};
+
+// Maps uppercase .env variable names → CredForm keys
+const ENV_KEY_MAP: Record<string, keyof CredForm> = {
+  META_ACCESS_TOKEN: "meta_access_token",
+  META_AD_ACCOUNT_ID: "meta_ad_account_id",
+  META_CAPI_DATASET_ID: "meta_capi_dataset_id",
+  META_CAPI_ACCESS_TOKEN: "meta_capi_access_token",
+  GHL_API_KEY: "ghl_api_key",
+  GHL_LOCATION_ID: "ghl_location_id",
+  GHL_LOCATION_NAME: "ghl_location_name",
+  STRIPE_SECRET_KEY: "stripe_secret_key",
+  STRIPE_WEBHOOK_SECRET: "stripe_webhook_secret",
+  CAPI_EVENT_SOURCE_URL: "capi_event_source_url",
+  CAPI_EVENT_NAME: "capi_event_name",
+};
+
+function parseEnvText(text: string): { form: Partial<CredForm>; unrecognized: string[] } {
+  const form: Partial<CredForm> = {};
+  const unrecognized: string[] = [];
+
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+
+    const key = line.slice(0, eq).trim().toUpperCase();
+    // Strip surrounding quotes from value
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (!val) continue;
+
+    if (ENV_KEY_MAP[key]) {
+      form[ENV_KEY_MAP[key]] = val;
+    } else if (Object.keys(ENV_KEY_MAP).some((k) => k === key)) {
+      // already handled
+    } else {
+      unrecognized.push(key);
+    }
+  }
+
+  return { form, unrecognized };
+}
+
 export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?: () => void }) {
   const [accounts, setAccounts] = useState<AdAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +174,14 @@ export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?
   const [error, setError] = useState("");
   const [testResults, setTestResults] = useState<Record<number, string>>({});
   const [wizardAccount, setWizardAccount] = useState<AdAccount | null>(null);
+  const [credAccount, setCredAccount] = useState<AdAccount | null>(null);
+  const [credForm, setCredForm] = useState<CredForm>(emptyCredForm());
+  const [credStatus, setCredStatus] = useState<Record<string, boolean>>({});
+  const [credSaving, setCredSaving] = useState(false);
+  const [credError, setCredError] = useState("");
+  const [pasteMode, setPasteMode] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [parseResult, setParseResult] = useState<{ matched: number; unrecognized: string[] } | null>(null);
 
   const load = async () => {
     try {
@@ -206,6 +304,49 @@ export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?
     }
   };
 
+  const openCreds = async (a: AdAccount) => {
+    setCredAccount(a);
+    setCredForm(emptyCredForm());
+    setCredError("");
+    setPasteMode(false);
+    setPasteText("");
+    setParseResult(null);
+    try {
+      const status = await getCredentialStatus(a.id);
+      setCredStatus(status.keys || {});
+    } catch {
+      setCredStatus({});
+    }
+  };
+
+  const handlePasteApply = () => {
+    const { form, unrecognized } = parseEnvText(pasteText);
+    setCredForm({ ...emptyCredForm(), ...form });
+    setParseResult({ matched: Object.keys(form).length, unrecognized });
+    setPasteMode(false);
+  };
+
+  const handleSaveCreds = async () => {
+    if (!credAccount) return;
+    setCredSaving(true);
+    setCredError("");
+    try {
+      const payload: Record<string, string> = {};
+      for (const [k, v] of Object.entries(credForm)) {
+        if (v.trim()) payload[k] = v.trim();
+      }
+      await saveCredentials(credAccount.id, payload);
+      const status = await getCredentialStatus(credAccount.id);
+      setCredStatus(status.keys || {});
+      setCredForm(emptyCredForm());
+      load();
+    } catch (e: any) {
+      setCredError(e.message);
+    } finally {
+      setCredSaving(false);
+    }
+  };
+
   if (loading) return <div className="dashboard" style={{ padding: "2rem" }}>Loading accounts…</div>;
 
   const incompleteCount = accounts.filter((a) => a.is_active && !isProfileComplete(a)).length;
@@ -249,7 +390,7 @@ export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?
               <tr>
                 <th>Name</th>
                 <th>Account ID</th>
-                <th>Token</th>
+                <th>Credentials</th>
                 <th>Profile</th>
                 <th>Schedule</th>
                 <th>Last Audit</th>
@@ -265,8 +406,8 @@ export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?
                     <td>{a.account_name}</td>
                     <td><code style={{ fontSize: "0.8rem" }}>{a.account_id}</code></td>
                     <td>
-                      <span className={`badge ${a.has_custom_token ? "badge-success" : "badge-neutral"}`}>
-                        {a.has_custom_token ? "Custom" : "Default"}
+                      <span className={`badge ${a.has_sm_credentials ? "badge-success" : "badge-neutral"}`}>
+                        {a.has_sm_credentials ? "Secrets Manager" : "Default (.env)"}
                       </span>
                     </td>
                     <td>
@@ -286,6 +427,7 @@ export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?
                     <td>
                       <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
                         <button className="btn btn-sm" onClick={() => openEdit(a)}>Edit</button>
+                        <button className="btn btn-sm" onClick={() => openCreds(a)}>Credentials</button>
                         <button
                           className="btn btn-sm"
                           style={!complete ? { background: "rgba(217,119,6,0.15)", borderColor: "#d97706", color: "#d97706" } : {}}
@@ -323,6 +465,106 @@ export default function AccountsPage({ onAccountsChanged }: { onAccountsChanged?
           }}
           onClose={() => setWizardAccount(null)}
         />
+      )}
+
+      {credAccount && (
+        <div className="modal-overlay" onClick={() => setCredAccount(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "560px" }}>
+            <div className="modal-header">
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                <h3 style={{ margin: 0 }}>Credentials — {credAccount.account_name}</h3>
+                <button
+                  className="btn btn-sm"
+                  style={{ fontSize: "0.75rem" }}
+                  onClick={() => { setPasteMode(!pasteMode); setParseResult(null); }}
+                >
+                  {pasteMode ? "← Back to fields" : "Paste .env"}
+                </button>
+              </div>
+              <button className="modal-close" onClick={() => setCredAccount(null)}>×</button>
+            </div>
+            <div className="modal-body">
+              {credError && <div className="error-banner" style={{ marginBottom: "1rem" }}>{credError}</div>}
+
+              {pasteMode ? (
+                <>
+                  <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "0.75rem" }}>
+                    Paste your <code>.env</code> file contents. Only the relevant keys will be extracted — everything else is ignored.
+                  </p>
+                  <textarea
+                    className="form-input"
+                    style={{ fontFamily: "monospace", fontSize: "0.8rem", height: "280px", resize: "vertical" }}
+                    placeholder={"META_ACCESS_TOKEN=EAABwz...\nGHL_API_KEY=eyJhbGci...\nSTRIPE_SECRET_KEY=sk_live_...\n# comments and unrelated keys are ignored"}
+                    value={pasteText}
+                    onChange={(e) => setPasteText(e.target.value)}
+                  />
+                  <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1rem" }}>
+                    <button className="btn" onClick={() => setPasteMode(false)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={handlePasteApply} disabled={!pasteText.trim()}>
+                      Parse & Fill Fields
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {parseResult && (
+                    <div style={{
+                      background: parseResult.matched > 0 ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)",
+                      border: `1px solid ${parseResult.matched > 0 ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}`,
+                      borderRadius: "6px",
+                      padding: "0.6rem 0.75rem",
+                      fontSize: "0.8rem",
+                      marginBottom: "1rem",
+                    }}>
+                      <strong>{parseResult.matched} keys matched</strong> from your .env
+                      {parseResult.unrecognized.length > 0 && (
+                        <span style={{ color: "var(--text-muted)" }}>
+                          {" "}· {parseResult.unrecognized.length} ignored ({parseResult.unrecognized.slice(0, 4).join(", ")}{parseResult.unrecognized.length > 4 ? "…" : ""})
+                        </span>
+                      )}
+                      . Review fields below then save.
+                    </div>
+                  )}
+
+                  {!parseResult && (
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginBottom: "1rem" }}>
+                      Stored in AWS Secrets Manager. Leave any field blank to keep the existing value.
+                      Green dot = key is already set in SM.
+                    </p>
+                  )}
+
+                  {(Object.keys(emptyCredForm()) as (keyof CredForm)[]).map((key) => (
+                    <div className="form-group" key={key}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                        {credStatus[key] && !credForm[key] && (
+                          <span title="Already set in SM" style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--success)", display: "inline-block", flexShrink: 0 }} />
+                        )}
+                        {credForm[key] && (
+                          <span title="Will be updated" style={{ width: 8, height: 8, borderRadius: "50%", background: "#f59e0b", display: "inline-block", flexShrink: 0 }} />
+                        )}
+                        {CRED_LABELS[key]}
+                      </label>
+                      <input
+                        type={key.includes("token") || key.includes("key") || key.includes("secret") ? "password" : "text"}
+                        className="form-input"
+                        placeholder={credStatus[key] ? "Already set — leave blank to keep" : "Not set"}
+                        value={credForm[key]}
+                        onChange={(e) => setCredForm({ ...credForm, [key]: e.target.value })}
+                      />
+                    </div>
+                  ))}
+
+                  <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
+                    <button className="btn" onClick={() => setCredAccount(null)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={handleSaveCreds} disabled={credSaving}>
+                      {credSaving ? "Saving…" : "Save to Secrets Manager"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {showForm && (

@@ -134,6 +134,24 @@ export async function testAccountToken(
   return request(`/api/accounts/${id}/test`, { method: "POST" });
 }
 
+export async function getCredentialStatus(id: number): Promise<{
+  has_sm_credentials: boolean;
+  secret_name?: string;
+  keys: Record<string, boolean>;
+}> {
+  return request(`/api/accounts/${id}/credential-status`);
+}
+
+export async function saveCredentials(
+  id: number,
+  payload: Record<string, string>
+): Promise<{ status: string; secret_name: string; arn: string }> {
+  return request(`/api/accounts/${id}/credentials`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 // ── Audit ───────────────────────────────────────────────────────────────────
 
 export async function triggerAudit(payload: {

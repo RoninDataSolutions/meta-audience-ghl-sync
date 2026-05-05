@@ -13,8 +13,13 @@ from typing import Any
 
 import httpx
 
+from typing import TYPE_CHECKING
+
 from config import settings
 from models import AuditReport
+
+if TYPE_CHECKING:
+    from services.credential_resolver import AccountCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -986,7 +991,7 @@ async def analyze_with_claude_opus(payload_str: str, api_key: str) -> dict:
                     "content-type": "application/json",
                 },
                 json={
-                    "model": "claude-opus-4-6-20250515",
+                    "model": "claude-opus-4-7",
                     "max_tokens": 16000,
                     "system": AUDIT_SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": payload_str}],
@@ -1098,20 +1103,24 @@ def _truncate_payload(payload: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def fetch_conversation_insights(days: int = 60) -> dict:
+async def fetch_conversation_insights(
+    days: int = 60,
+    creds: "AccountCredentials | None" = None,
+) -> dict:
     """
     Pull recent pre-sale IG/WhatsApp/Facebook conversations from GHL,
     anonymize them, then summarize patterns via a lightweight Claude Haiku call.
     Returns structured insights with no PII.
     """
-    if not settings.GHL_API_KEY or not settings.GHL_LOCATION_ID:
+    ghl_ok = creds.has_ghl() if creds else (bool(settings.GHL_API_KEY) and bool(settings.GHL_LOCATION_ID))
+    if not ghl_ok:
         return {"error": "GHL not configured"}
     if not settings.CLAUDE_API_KEY:
         return {"error": "Claude API key required for summarization"}
 
     from api.ghl_client import fetch_conversations, fetch_conversation_messages
 
-    conversations = await fetch_conversations(days=days, max_count=120)
+    conversations = await fetch_conversations(days=days, max_count=120, creds=creds)
     if not conversations:
         return {"error": "No recent pre-sale conversations found", "sample_size": 0}
 
@@ -1123,7 +1132,7 @@ async def fetch_conversation_insights(days: int = 60) -> dict:
     # Fetch messages concurrently in batches of 15
     async def _safe_messages(conv: dict) -> list[dict]:
         try:
-            return await fetch_conversation_messages(conv["id"], limit=20)
+            return await fetch_conversation_messages(conv["id"], limit=20, creds=creds)
         except Exception:
             return []
 
@@ -1207,12 +1216,16 @@ async def fetch_conversation_insights(days: int = 60) -> dict:
         }
 
 
-async def fetch_ltv_insights(days_back: int = 180) -> dict:
+async def fetch_ltv_insights(
+    days_back: int = 180,
+    creds: "AccountCredentials | None" = None,
+) -> dict:
     """
     Pull contacts with LTV populated from GHL and compute distribution + cohort trends.
     Since ~100% of contacts come from Meta, this is effectively Meta customer LTV.
     """
-    if not settings.GHL_API_KEY or not settings.GHL_LOCATION_ID:
+    ghl_ok = creds.has_ghl() if creds else (bool(settings.GHL_API_KEY) and bool(settings.GHL_LOCATION_ID))
+    if not ghl_ok:
         return {"error": "GHL not configured"}
 
     from api.ghl_client import get_custom_fields, get_all_contacts
@@ -1222,7 +1235,7 @@ async def fetch_ltv_insights(days_back: int = 180) -> dict:
 
     # Find LTV field UUID
     try:
-        fields = await get_custom_fields()
+        fields = await get_custom_fields(creds=creds)
         ltv_field = next((f for f in fields if f.get("fieldKey") == "contact.ltv"), None)
         if not ltv_field:
             return {"error": "LTV custom field (contact.ltv) not found in GHL"}
@@ -1231,7 +1244,7 @@ async def fetch_ltv_insights(days_back: int = 180) -> dict:
         return {"error": f"Could not fetch custom fields: {e}"}
 
     try:
-        contacts = await get_all_contacts()
+        contacts = await get_all_contacts(creds=creds)
     except Exception as e:
         return {"error": f"Could not fetch contacts: {e}"}
 
@@ -1318,6 +1331,7 @@ async def build_audit_payload(
     website_url: str | None = None,
     business_notes: str | None = None,
     report_notes: str | None = None,
+    creds: "AccountCredentials | None" = None,
 ) -> dict:
     """Fetch all Meta data and return the structured audit payload."""
 
@@ -1478,10 +1492,11 @@ async def build_audit_payload(
         enrichment_labels.append("website")
 
     # GHL enrichment — always run when GHL is configured
-    if settings.GHL_API_KEY and settings.GHL_LOCATION_ID:
-        enrichment_tasks.append(fetch_conversation_insights(days=60))
+    ghl_ok = creds.has_ghl() if creds else (bool(settings.GHL_API_KEY) and bool(settings.GHL_LOCATION_ID))
+    if ghl_ok:
+        enrichment_tasks.append(fetch_conversation_insights(days=60, creds=creds))
         enrichment_labels.append("conversation_insights")
-        enrichment_tasks.append(fetch_ltv_insights(days_back=180))
+        enrichment_tasks.append(fetch_ltv_insights(days_back=180, creds=creds))
         enrichment_labels.append("ltv_insights")
 
     if enrichment_tasks:
@@ -1537,6 +1552,7 @@ async def run_audit(
     website_url: str | None = None,
     business_notes: str | None = None,
     report_notes: str | None = None,
+    creds: "AccountCredentials | None" = None,
 ) -> None:
     """Full audit workflow. Updates AuditReport row when done."""
     try:
@@ -1548,6 +1564,7 @@ async def run_audit(
             website_url=website_url,
             business_notes=business_notes,
             report_notes=report_notes,
+            creds=creds,
         )
 
         # 2. Serialize payload

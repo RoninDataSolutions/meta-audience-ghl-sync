@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,9 @@ from models import SyncConfig, SyncRun, SyncContact, SyncStatus
 from services.hasher import prepare_contact_row
 from services.normalizer import normalize_and_stats
 from services import email_service
+
+if TYPE_CHECKING:
+    from services.credential_resolver import AccountCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +28,15 @@ def get_running_sync_id() -> int | None:
     return _running_sync_id
 
 
-async def run_sync(config_id: int, db: Session) -> None:
+async def run_sync(
+    config_id: int,
+    db: Session,
+    skip_email: bool = False,
+    creds: "AccountCredentials | None" = None,
+) -> None:
     """Execute the full sync workflow."""
     global _running_sync_id
 
-    # Create sync run record
     run = SyncRun(config_id=config_id, status=SyncStatus.RUNNING)
     db.add(run)
     db.commit()
@@ -40,25 +48,27 @@ async def run_sync(config_id: int, db: Session) -> None:
         if not config:
             raise ValueError(f"Config {config_id} not found")
 
+        # Resolve credentials if not provided
+        if creds is None:
+            from services.credential_resolver import resolve
+            creds = resolve(config.meta_ad_account_id, db)
+
         logger.info(f"Starting sync run {run.id}, LTV field: {config.ghl_ltv_field_name}")
 
         # Step 1: Fetch all contacts from GHL
         logger.info("Step 1: Fetching all contacts from GHL...")
-        all_contacts = await ghl_client.get_all_contacts()
+        all_contacts = await ghl_client.get_all_contacts(creds=creds)
         if not all_contacts:
             raise ValueError("No contacts found in GHL location")
 
-        # Filter to contacts Meta can actually match (needs email or phone)
         contacts = [c for c in all_contacts if c.get("email") or c.get("phone")]
         skipped = len(all_contacts) - len(contacts)
         if skipped:
             logger.info(f"Skipped {skipped} contacts with no email or phone (unidentifiable by Meta)")
 
-        # Step 2: Extract LTV values — contacts without LTV default to 0
+        # Step 2: Extract LTV values
         logger.info("Step 2: Extracting LTV values...")
-        # GHL v2 contacts store custom fields by UUID id, not fieldKey.
-        # Resolve the configured fieldKey (e.g. "contact.ltv") to its UUID.
-        custom_fields = await ghl_client.get_custom_fields()
+        custom_fields = await ghl_client.get_custom_fields(creds=creds)
         ltv_field_uuid = _resolve_ltv_field_uuid(custom_fields, config.ghl_ltv_field_key)
         logger.info(f"Resolved LTV field '{config.ghl_ltv_field_key}' → UUID '{ltv_field_uuid}'")
 
@@ -95,7 +105,7 @@ async def run_sync(config_id: int, db: Session) -> None:
             .first() or type("", (), {"meta_audience_id": None})()
         ).meta_audience_id
 
-        if candidate_audience_id and await meta_client.audience_exists(candidate_audience_id):
+        if candidate_audience_id and await meta_client.audience_exists(candidate_audience_id, creds=creds):
             logger.info(f"Step 5: Reusing existing Meta Audience ID {candidate_audience_id}")
             audience = {"id": candidate_audience_id, "name": audience_name}
         else:
@@ -106,16 +116,17 @@ async def run_sync(config_id: int, db: Session) -> None:
             audience = await meta_client.create_custom_audience(
                 name=audience_name,
                 description="GHL high-value contacts synced via LTV normalization",
+                creds=creds,
             )
 
         # Step 6: Upload contacts in batches
         logger.info("Step 6: Uploading contacts to Meta...")
-        upload_result = await meta_client.upload_users(audience["id"], schema, rows)
+        upload_result = await meta_client.upload_users(audience["id"], schema, rows, creds=creds)
 
         # Step 7: Get or create Lookalike Audience
         lookalike_name = f"{audience_name}-LAL-1%"
         candidate_lookalike_id = config.meta_lookalike_id or None
-        if candidate_lookalike_id and await meta_client.audience_exists(candidate_lookalike_id):
+        if candidate_lookalike_id and await meta_client.audience_exists(candidate_lookalike_id, creds=creds):
             logger.info(f"Step 7: Reusing existing Lookalike Audience ID {candidate_lookalike_id}")
             lookalike = {"id": candidate_lookalike_id, "name": lookalike_name}
         else:
@@ -126,6 +137,7 @@ async def run_sync(config_id: int, db: Session) -> None:
             lookalike = await meta_client.create_lookalike_audience(
                 origin_audience_id=audience["id"],
                 name=lookalike_name,
+                creds=creds,
             )
 
         # Step 8: Update sync run record
@@ -157,12 +169,13 @@ async def run_sync(config_id: int, db: Session) -> None:
             db.add(sc)
         db.commit()
 
-        # Step 10: Send success email
-        logger.info("Step 10: Sending success email...")
-        try:
-            email_service.send_success_email(run)
-        except Exception as e:
-            logger.error(f"Failed to send success email: {e}")
+        # Step 10: Send success email (skipped when scheduler sends combined email)
+        if not skip_email:
+            logger.info("Step 10: Sending success email...")
+            try:
+                email_service.send_success_email(run)
+            except Exception as e:
+                logger.error(f"Failed to send success email: {e}")
 
         logger.info(f"Sync run {run.id} completed successfully!")
 

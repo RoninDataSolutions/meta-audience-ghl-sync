@@ -161,6 +161,64 @@ def send_audit_email(
         raise
 
 
+def send_combined_sync_email(sync_run, conversion_stats: dict | None) -> None:
+    """Single daily email combining LTV sync results and CAPI conversion sync."""
+    stats = sync_run.normalization_stats or {}
+    dist = stats.get("distribution", [0] * 10)
+    top_10 = dist[9] if len(dist) > 9 else 0
+    middle_50 = sum(dist[3:8]) if len(dist) >= 8 else 0
+    bottom_40 = sum(dist[0:4]) if len(dist) >= 4 else 0
+    match_rate = (
+        round(sync_run.contacts_matched / sync_run.contacts_processed * 100, 1)
+        if sync_run.contacts_processed > 0 else 0
+    )
+
+    date_str = sync_run.completed_at.strftime("%Y-%m-%d")
+    subject = f"Daily Sync Report — {date_str}"
+
+    # Conversion section
+    if conversion_stats and conversion_stats.get("status") != "skipped":
+        new_txns = conversion_stats.get("new", 0)
+        sent = conversion_stats.get("sent", 0)
+        failed = conversion_stats.get("failed", 0)
+        skipped = conversion_stats.get("skipped", 0)
+        ltv_updated = conversion_stats.get("ltv_updated", 0)
+        conversion_html = f"""
+    <h3>Conversion Sync (Last 7 Days)</h3>
+    <ul>
+        <li>New Stripe Transactions: {new_txns}</li>
+        <li>Sent to Meta CAPI: {sent}</li>
+        <li>Failed: {failed}</li>
+        <li>Skipped (already sent): {skipped}</li>
+        <li>LTV Profiles Updated: {ltv_updated}</li>
+    </ul>"""
+    elif conversion_stats and conversion_stats.get("status") == "skipped":
+        conversion_html = "<h3>Conversion Sync</h3><p>Skipped — Stripe not configured.</p>"
+    else:
+        conversion_html = "<h3>Conversion Sync</h3><p>No new transactions in last 7 days.</p>"
+
+    html = f"""
+    <h2>Daily Sync Report — {date_str}</h2>
+    <p>Completed at: {sync_run.completed_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+
+    <h3>GHL → Meta Audience Sync</h3>
+    <ul>
+        <li>Contacts Processed: {sync_run.contacts_processed}</li>
+        <li>Contacts Matched by Meta: {sync_run.contacts_matched} ({match_rate}%)</li>
+        <li>Custom Audience: {sync_run.meta_audience_name} (ID: {sync_run.meta_audience_id})</li>
+        <li>Lookalike Audience: {sync_run.meta_lookalike_name} (ID: {sync_run.meta_lookalike_id})</li>
+    </ul>
+    <h3>Value Distribution</h3>
+    <ul>
+        <li>Top 10%: {top_10} contacts</li>
+        <li>Middle 50%: {middle_50} contacts</li>
+        <li>Bottom 40%: {bottom_40} contacts</li>
+    </ul>
+    {conversion_html}
+    """
+    _send_email(subject, html)
+
+
 def send_test_email() -> None:
     """Send a test email to verify SMTP configuration."""
     subject = "GHL Meta Sync - Test Email"

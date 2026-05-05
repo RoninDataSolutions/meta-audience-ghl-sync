@@ -64,6 +64,7 @@ class AdAccount(Base):
     website_url = Column(Text, nullable=True)
     business_profile = Column(JSON, nullable=True, default=dict)
     business_notes = Column(Text, nullable=True)
+    aws_secret_name = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))

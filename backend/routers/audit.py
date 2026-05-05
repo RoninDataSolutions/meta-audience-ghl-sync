@@ -64,22 +64,22 @@ def _report_to_dict(report: AuditReport, include_full: bool = False) -> dict:
     return base
 
 
-def _resolve_account(account_id: str | None, db: Session) -> tuple[str, str]:
-    """Return (normalized_account_id, token). Falls back to .env values."""
+def _resolve_account(account_id: str | None, db: Session):
+    """Return (normalized_account_id, token, creds). Uses credential_resolver."""
+    from services.credential_resolver import resolve, AccountCredentials
     if account_id:
         normalized = account_id if account_id.startswith("act_") else f"act_{account_id}"
-        record = db.query(AdAccount).filter(AdAccount.account_id == normalized).first()
-        if record:
-            token = record.meta_access_token or settings.META_ACCESS_TOKEN
-            return normalized, token
-        # Not in DB — use default token
-        return normalized, settings.META_ACCESS_TOKEN
+        creds = resolve(normalized, db)
+        token = creds.meta_access_token or settings.META_ACCESS_TOKEN
+        return normalized, token, creds
 
     # Fall back to env
-    env_id = settings.META_AD_ACCOUNT_ID
-    if not env_id.startswith("act_"):
+    creds = resolve(None, db)
+    env_id = creds.meta_ad_account_id or settings.META_AD_ACCOUNT_ID
+    if env_id and not env_id.startswith("act_"):
         env_id = f"act_{env_id}"
-    return env_id, settings.META_ACCESS_TOKEN
+    token = creds.meta_access_token or settings.META_ACCESS_TOKEN
+    return env_id, token, creds
 
 
 async def _run_audit_background(
@@ -91,6 +91,7 @@ async def _run_audit_background(
     website_url: str | None = None,
     business_notes: str | None = None,
     report_notes: str | None = None,
+    creds=None,
 ):
     db = SessionLocal()
     try:
@@ -105,6 +106,7 @@ async def _run_audit_background(
             website_url=website_url,
             business_notes=business_notes,
             report_notes=report_notes,
+            creds=creds,
         )
     except Exception as e:
         logger.error(f"Background audit {report_id} failed: {e}", exc_info=True)
@@ -114,7 +116,7 @@ async def _run_audit_background(
 
 @router.post("/audit/trigger")
 async def trigger_audit(payload: AuditTriggerRequest, db: Session = Depends(get_db)):
-    account_id, token = _resolve_account(payload.account_id, db)
+    account_id, token, creds = _resolve_account(payload.account_id, db)
 
     if not token:
         raise HTTPException(status_code=400, detail="No Meta access token configured")
@@ -168,6 +170,7 @@ async def trigger_audit(payload: AuditTriggerRequest, db: Session = Depends(get_
         website_url=website_url,
         business_notes=business_notes,
         report_notes=formatted_notes,
+        creds=creds,
     ))
 
     return {
@@ -262,10 +265,50 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/audit/reports/{report_id}/pdf")
-def download_pdf(report_id: int, db: Session = Depends(get_db)):
+def download_pdf(
+    report_id: int,
+    model: str | None = None,
+    db: Session = Depends(get_db),
+):
+    from services.audit_pdf import generate_pdf
+
     report = db.query(AuditReport).filter(AuditReport.id == report_id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
+
+    # If a specific model is requested, generate on the fly filtered to that model
+    if model:
+        analyses = report.analyses or {}
+        if model not in analyses:
+            raise HTTPException(status_code=404, detail=f"No analysis found for model '{model}'")
+        if report.status != "completed":
+            raise HTTPException(status_code=400, detail="Report not yet completed")
+
+        account = db.query(AdAccount).filter(AdAccount.account_id == report.account_id).first()
+        account_name = account.account_name if account else report.account_id
+        metrics = {
+            "total_spend_7d": report.total_spend_7d, "total_spend_30d": report.total_spend_30d,
+            "total_conversions_7d": report.total_conversions_7d, "total_conversions_30d": report.total_conversions_30d,
+            "total_impressions_7d": report.total_impressions_7d, "total_impressions_30d": report.total_impressions_30d,
+            "total_clicks_7d": report.total_clicks_7d, "total_clicks_30d": report.total_clicks_30d,
+            "avg_cpa_30d": report.avg_cpa_30d, "avg_ctr_30d": report.avg_ctr_30d,
+            "avg_roas_30d": report.avg_roas_30d, "campaign_count": report.campaign_count,
+            "audience_count": report.audience_count,
+        }
+        pdf_bytes = generate_pdf(
+            account_name=account_name,
+            metrics=metrics,
+            raw_metrics=report.raw_metrics or {},
+            analyses={model: analyses[model]},
+            prev_report=None,
+        )
+        filename = f"audit_{report.account_id}_{report_id}_{model}.pdf"
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     if not report.pdf_report:
         raise HTTPException(status_code=404, detail="PDF not available for this report")
 

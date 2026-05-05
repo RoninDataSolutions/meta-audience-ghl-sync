@@ -47,12 +47,27 @@ class AccountUpdate(BaseModel):
     business_notes: str | None = None
 
 
+class CredentialPayload(BaseModel):
+    meta_access_token: str | None = None
+    meta_ad_account_id: str | None = None
+    meta_capi_dataset_id: str | None = None
+    meta_capi_access_token: str | None = None
+    ghl_api_key: str | None = None
+    ghl_location_id: str | None = None
+    ghl_location_name: str | None = None
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    capi_event_source_url: str | None = None
+    capi_event_name: str | None = None
+
+
 def _account_to_dict(account: AdAccount) -> dict:
     return {
         "id": account.id,
         "account_id": account.account_id,
         "account_name": account.account_name,
         "has_custom_token": bool(account.meta_access_token),
+        "has_sm_credentials": bool(account.aws_secret_name),
         "notification_email": account.notification_email,
         "audit_cron": account.audit_cron,
         "is_active": account.is_active,
@@ -167,16 +182,92 @@ def deactivate_account(account_db_id: int, db: Session = Depends(get_db)):
     return {"status": "deactivated", "account_id": account.account_id}
 
 
+@router.get("/accounts/{account_db_id}/credential-status")
+def get_credential_status(account_db_id: int, db: Session = Depends(get_db)):
+    """Return which credential keys are present in AWS Secrets Manager (no values exposed)."""
+    account = db.query(AdAccount).filter(AdAccount.id == account_db_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if not account.aws_secret_name:
+        return {"has_sm_credentials": False, "keys": {}}
+
+    from services.credential_resolver import secret_key_status
+    status = secret_key_status(account.aws_secret_name)
+    return {"has_sm_credentials": True, "secret_name": account.aws_secret_name, "keys": status}
+
+
+@router.put("/accounts/{account_db_id}/credentials")
+def upsert_credentials(
+    account_db_id: int,
+    payload: CredentialPayload,
+    db: Session = Depends(get_db),
+):
+    """Write (or update) per-account credentials in AWS Secrets Manager."""
+    account = db.query(AdAccount).filter(AdAccount.id == account_db_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    from services.credential_resolver import write_secret, secret_key_status, invalidate
+
+    secret_name = account.aws_secret_name or f"{settings.AWS_SECRET_PREFIX}/{account.account_id}"
+
+    # Merge with existing secret so partial updates don't wipe other keys
+    existing: dict = {}
+    if account.aws_secret_name:
+        try:
+            existing = {k: v for k, v in secret_key_status(account.aws_secret_name).items()}
+            # secret_key_status returns booleans, not values — we need the actual values
+            # Fetch the raw creds to merge
+            from services.credential_resolver import _fetch_from_sm
+            cur = _fetch_from_sm(account.aws_secret_name)
+            existing = {
+                "meta_access_token": cur.meta_access_token,
+                "meta_ad_account_id": cur.meta_ad_account_id,
+                "meta_capi_dataset_id": cur.meta_capi_dataset_id,
+                "meta_capi_access_token": cur.meta_capi_access_token,
+                "ghl_api_key": cur.ghl_api_key,
+                "ghl_location_id": cur.ghl_location_id,
+                "ghl_location_name": cur.ghl_location_name,
+                "stripe_secret_key": cur.stripe_secret_key,
+                "stripe_webhook_secret": cur.stripe_webhook_secret,
+                "capi_event_source_url": cur.capi_event_source_url,
+                "capi_event_name": cur.capi_event_name,
+            }
+        except Exception:
+            existing = {}
+
+    updates = payload.model_dump(exclude_none=True)
+    data = {**existing, **updates}
+
+    try:
+        arn = write_secret(secret_name, data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write secret: {e}")
+
+    # Link secret to account record
+    if account.aws_secret_name != secret_name:
+        account.aws_secret_name = secret_name
+        db.commit()
+
+    invalidate(secret_name)
+    return {"status": "saved", "secret_name": secret_name, "arn": arn}
+
+
 @router.post("/accounts/{account_db_id}/test")
 async def test_account_token(account_db_id: int, db: Session = Depends(get_db)):
     account = db.query(AdAccount).filter(AdAccount.id == account_db_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    token = account.meta_access_token or settings.META_ACCESS_TOKEN
+    from services.credential_resolver import resolve
+    creds = resolve(account.account_id, db)
+    token = creds.meta_access_token or settings.META_ACCESS_TOKEN
+    token_source = "sm" if account.aws_secret_name and creds.meta_access_token else (
+        "custom" if account.meta_access_token else "default"
+    )
     try:
         meta_info = await _test_meta_token(account.account_id, token)
-        # Update currency/timezone if changed
         account.currency = meta_info.get("currency", account.currency)
         account.timezone_name = meta_info.get("timezone_name", account.timezone_name)
         db.commit()
@@ -185,7 +276,7 @@ async def test_account_token(account_db_id: int, db: Session = Depends(get_db)):
             "account_name": meta_info.get("name"),
             "currency": meta_info.get("currency"),
             "timezone_name": meta_info.get("timezone_name"),
-            "token_source": "custom" if account.meta_access_token else "default",
+            "token_source": token_source,
         }
     except httpx.HTTPStatusError as e:
         return {"status": "error", "detail": e.response.text}

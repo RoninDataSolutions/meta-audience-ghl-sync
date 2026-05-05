@@ -9,6 +9,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -18,6 +19,9 @@ from api.ghl_client import get_all_contacts
 from config import settings
 from models import MatchedConversion
 from services.identity_resolver import match_stripe_to_ghl, normalize_phone
+
+if TYPE_CHECKING:
+    from services.credential_resolver import AccountCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -88,13 +92,14 @@ def build_capi_event(
     stripe_data: dict,
     ghl_attribution: dict,
     action_source: str = "website",
+    creds: "AccountCredentials | None" = None,
 ) -> tuple[dict, str]:
     """
     Build a Meta CAPI event with zero health context.
     No product names, no URLs, no class types — only hashed PII + value.
     action_source: "website" (≤7 days) or "physical_store" (8–90 days).
     """
-    event_name = settings.CAPI_EVENT_NAME
+    event_name = (creds.capi_event_name if creds and creds.capi_event_name else None) or settings.CAPI_EVENT_NAME
     event_id = f"evt_{stripe_data['session_id']}_{uuid.uuid4().hex[:8]}"
 
     user_data: dict = {}
@@ -149,8 +154,9 @@ def build_capi_event(
         },
     }
 
-    if settings.CAPI_EVENT_SOURCE_URL:
-        event["event_source_url"] = settings.CAPI_EVENT_SOURCE_URL
+    event_source_url = (creds.capi_event_source_url if creds else None) or settings.CAPI_EVENT_SOURCE_URL
+    if event_source_url:
+        event["event_source_url"] = event_source_url
 
     return event, event_id
 
@@ -175,6 +181,7 @@ async def process_conversion(
     stripe_session: dict,
     db: Session,
     source: str = "webhook",
+    creds: "AccountCredentials | None" = None,
 ) -> dict:
     """
     Full pipeline: extract → match GHL → build CAPI event → send → store.
@@ -192,7 +199,7 @@ async def process_conversion(
     stripe_data = _extract_stripe_data(stripe_session)
 
     # Fetch GHL contacts and run match cascade
-    contacts = await get_all_contacts()
+    contacts = await get_all_contacts(creds=creds)
     match_result = await match_stripe_to_ghl(stripe_data, contacts, db)
     ghl_contact = match_result["ghl_contact"]
 
@@ -201,7 +208,7 @@ async def process_conversion(
         ghl_attribution = extract_ghl_attribution(ghl_contact)
 
     # Build CAPI event
-    event, event_id = build_capi_event(stripe_data, ghl_attribution)
+    event, event_id = build_capi_event(stripe_data, ghl_attribution, creds=creds)
 
     # Persist record before sending (ensures we track even if CAPI fails)
     record = MatchedConversion(
@@ -237,8 +244,8 @@ async def process_conversion(
     db.refresh(record)
 
     # Send to Meta CAPI (gated by credentials)
-    dataset_id = settings.META_CAPI_DATASET_ID
-    capi_token = settings.META_CAPI_ACCESS_TOKEN
+    dataset_id = (creds.meta_capi_dataset_id if creds else None) or settings.META_CAPI_DATASET_ID
+    capi_token = (creds.meta_capi_access_token if creds else None) or settings.META_CAPI_ACCESS_TOKEN
 
     if not dataset_id or not capi_token:
         record.capi_status = "skipped"

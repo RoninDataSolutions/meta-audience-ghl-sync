@@ -9,15 +9,21 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # GHL
-    GHL_API_KEY: str
-    GHL_LOCATION_ID: str
+    # AWS (for Secrets Manager)
+    AWS_REGION: str = "us-east-1"
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_SECRET_PREFIX: str = "/ghl-sync/accounts"
+
+    # GHL — default account fallback (will be removed after YogiSoul migration)
+    GHL_API_KEY: str = ""
+    GHL_LOCATION_ID: str = ""
     GHL_LOCATION_NAME: str = ""
 
-    # Meta
-    META_ACCESS_TOKEN: str
-    META_AD_ACCOUNT_ID: str
-    META_BUSINESS_ID: str
+    # Meta — default account fallback
+    META_ACCESS_TOKEN: str = ""
+    META_AD_ACCOUNT_ID: str = ""
+    META_BUSINESS_ID: str = ""
 
     # Claude
     CLAUDE_API_KEY: str
@@ -49,14 +55,14 @@ class Settings(BaseSettings):
     AUDIT_SCHEDULE_CRON: str = ""
     AUDIT_EMAIL_TO: str = ""
 
-    # Stripe
+    # Stripe — default account fallback
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
 
-    # Meta Conversions API
+    # Meta Conversions API — default account fallback
     META_CAPI_DATASET_ID: str = ""
     META_CAPI_ACCESS_TOKEN: str = ""
-    CAPI_EVENT_NAME: str = "evt_complete"
+    CAPI_EVENT_NAME: str = "Purchase"
     CAPI_EVENT_SOURCE_URL: str = ""
 
     # Contact matching
