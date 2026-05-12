@@ -105,6 +105,82 @@ export default function HeatMapPage({ selectedAccount }: Props) {
     return `${d}d`;
   };
 
+  const handleExportCSV = () => {
+    if (!geoData?.states?.length) return;
+
+    const win = source?.days ?? days;
+    const accountLabel = selectedAccount?.account_name || selectedAccount?.account_id || "default";
+    const today = new Date().toISOString().slice(0, 10);
+    const filename = `heatmap_${accountLabel.replace(/[^a-z0-9]+/gi, "_")}_${windowLabel(win)}_${today}.csv`;
+
+    const sum = geoData.summary || {};
+    const narr = geoData.narrative || {};
+
+    // Section 1: summary header rows
+    const lines: string[] = [];
+    lines.push(`# Heat Map Report`);
+    lines.push(`# Account,${accountLabel}`);
+    lines.push(`# Window,${windowLabel(win)} (${win} days)`);
+    lines.push(`# Generated,${new Date().toISOString()}`);
+    lines.push(`# Total Spend,$${sum.total_spend ?? 0}`);
+    lines.push(`# Avg Monthly Spend,$${sum.avg_monthly_spend ?? 0}`);
+    lines.push(`# Total LTV,$${sum.total_ltv ?? 0}`);
+    lines.push(`# Window ROAS,${sum.account_roas ?? ""}`);
+    lines.push(`# LTV ROAS,${sum.ltv_roas ?? ""}`);
+    if (narr.inclusion_csv) lines.push(`# Inclusion List,"${narr.inclusion_csv}"`);
+    if (narr.exclusion_csv) lines.push(`# Exclusion List,"${narr.exclusion_csv}"`);
+    lines.push("");
+
+    // Section 2: per-state rows
+    const header = [
+      "State", "State Code", "Classification",
+      "Spend", "Impressions", "Clicks",
+      "Contacts", "Paying Contacts",
+      "Conversions", "Revenue (window)", "Total LTV", "Avg LTV",
+      "CPA", "ROAS", "Conversion Rate %",
+    ];
+    lines.push(header.join(","));
+
+    const escape = (v: any): string => {
+      if (v == null) return "";
+      const s = String(v);
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+
+    const sorted = [...geoData.states].sort((a: any, b: any) => (b.spend ?? 0) - (a.spend ?? 0));
+    for (const s of sorted) {
+      lines.push([
+        s.state_name, s.state, s.classification ?? "",
+        s.spend, s.impressions, s.clicks,
+        s.contacts, s.paying_contacts,
+        s.conversions, s.revenue_30d, s.total_ltv, s.avg_ltv ?? "",
+        s.cpa ?? "", s.roas ?? "", s.conversion_rate_pct,
+      ].map(escape).join(","));
+    }
+
+    // Section 3: narrative as a trailing block
+    if (narr.summary) {
+      lines.push("");
+      lines.push("# Plain English Summary");
+      for (const para of narr.summary.split("\n")) {
+        lines.push(`# ${para}`);
+      }
+    }
+
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <main className="dashboard">
       <div className="card">
@@ -178,6 +254,22 @@ export default function HeatMapPage({ selectedAccount }: Props) {
             Apply
           </button>
           <div style={{ flex: 1 }} />
+          <button
+            className="btn btn-sm"
+            onClick={() => window.print()}
+            disabled={!geoData?.states?.length}
+            title="Print or save the full dashboard as PDF (all tabs render sequentially in print)"
+          >
+            ⎙ Export PDF
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={handleExportCSV}
+            disabled={!geoData?.states?.length}
+            title="Download CSV report (summary + per-state table + plain-English narrative)"
+          >
+            ⬇ Export CSV
+          </button>
           <button
             className="btn btn-primary"
             onClick={() => handleGenerate()}

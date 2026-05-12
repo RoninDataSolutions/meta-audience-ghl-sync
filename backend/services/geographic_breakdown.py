@@ -212,46 +212,43 @@ def _effective_roas(row: dict) -> float:
 
 def _classify_state(row: dict, account_avg_cpa: float | None) -> str | None:
     """
-    Tag each state row as 'working', 'wasted', 'opportunity', or None.
+    Tag each state by ROAS tier:
 
-    Working:     ROAS >= 1.0 on >= $100 spend          (positive return at scale)
-    Wasted:      0 paying customers on >= $100 spend   (money gone, no contacts)
-                 OR ROAS < 0.5 on >= $100 spend         (lost half of every dollar)
-    Opportunity: ROAS >= 2.0 on < $200 spend            (small bet paying off, scale it)
-                 OR total_ltv >= $200 on < $50 spend    (untapped existing customer base)
-
-    Sub-$50 spend states are unclassified unless they're sitting on untapped LTV.
+    high_roas:    ROAS >= 2.0 on >= $50 spend   (scale these up — clear winners)
+    medium_roas:  1.0 <= ROAS < 2.0             (profitable, hold steady)
+    low_roas:     0 < ROAS < 1.0                (losing money on every $)
+    no_roas:      spend > 0 AND zero paying customers AND zero revenue/LTV
+                  (silent drain — cut these immediately)
+    untapped:     total_ltv >= $200 on < $50 spend  (customers exist, no ads running there)
     """
     spend = row["spend"] or 0
     total_ltv = row.get("total_ltv", 0) or 0
     paying = row.get("paying_contacts", 0) or 0
     conversions = row.get("conversions", 0) or 0
+    revenue_30d = row.get("revenue_30d", 0) or 0
     effective_paying = max(paying, conversions)
+    has_revenue_signal = total_ltv > 0 or revenue_30d > 0
 
-    # Untapped LTV — high lifetime value with little/no current spend
-    if total_ltv >= 200 and spend < 50:
-        return "opportunity"
+    # Zero return on any spend — silent or loud drain
+    if spend > 0 and effective_paying == 0 and not has_revenue_signal:
+        return "no_roas"
 
+    # Untapped — historical customer base, no current ads running
+    if spend < 50 and total_ltv >= 200:
+        return "untapped"
+
+    # Sub-$50 spend without strong LTV — too little signal
     if spend < 50:
         return None
 
     roas = _effective_roas(row)
 
-    # Wasted: meaningful spend with zero paying customers
-    if effective_paying == 0 and spend >= 100:
-        return "wasted"
-
-    # Wasted: severely negative ROAS (lost half of every dollar)
-    if roas < 0.5 and spend >= 100:
-        return "wasted"
-
-    # Opportunity: strong ROAS on a small bet — scale it up
-    if roas >= 2.0 and spend < 200:
-        return "opportunity"
-
-    # Working: at-or-above breakeven on meaningful spend
-    if roas >= 1.0 and spend >= 100:
-        return "working"
+    if roas >= 2.0:
+        return "high_roas"
+    if roas >= 1.0:
+        return "medium_roas"
+    if roas > 0:
+        return "low_roas"
 
     return None
 
@@ -573,113 +570,149 @@ def _build_narrative(
             "summary": f"No Meta ad spend or GHL revenue data found for US states in the last {win}.",
         }
 
-    # ── Classify the states ───────────────────────────────────────────────────
-    working = sorted(
-        [r for r in rows if r["classification"] == "working"],
-        key=lambda r: r["total_ltv"], reverse=True,
-    )
-    wasted = sorted(
-        [r for r in rows if r["classification"] == "wasted"],
-        key=lambda r: r["spend"], reverse=True,
-    )
-    opportunity = sorted(
-        [r for r in rows if r["classification"] == "opportunity"],
-        key=lambda r: _state_roas(r), reverse=True,
-    )
+    # ── Bucket states by new ROAS tier ────────────────────────────────────────
+    high_roas = sorted([r for r in rows if r["classification"] == "high_roas"],
+                       key=lambda r: _state_roas(r), reverse=True)
+    medium_roas = sorted([r for r in rows if r["classification"] == "medium_roas"],
+                         key=lambda r: _state_roas(r), reverse=True)
+    low_roas = sorted([r for r in rows if r["classification"] == "low_roas"],
+                      key=lambda r: r["spend"], reverse=True)
+    no_roas = sorted([r for r in rows if r["classification"] == "no_roas"],
+                     key=lambda r: r["spend"], reverse=True)
+    untapped = sorted([r for r in rows if r["classification"] == "untapped"],
+                      key=lambda r: r["total_ltv"], reverse=True)
 
-    # ── Compute totals ────────────────────────────────────────────────────────
-    wasted_spend = sum(r["spend"] for r in wasted)
-    working_spend = sum(r["spend"] for r in working)
-    working_ltv = sum(r["total_ltv"] for r in working)
+    # ── Totals ────────────────────────────────────────────────────────────────
+    high_spend = sum(r["spend"] for r in high_roas)
+    high_ltv = sum(r["total_ltv"] for r in high_roas)
+    no_roas_spend = sum(r["spend"] for r in no_roas)
+    low_roas_spend = sum(r["spend"] for r in low_roas)
+    recoverable = no_roas_spend + low_roas_spend
 
-    # Average ROAS of opportunity states — used to estimate reallocation upside
-    opp_with_revenue = [r for r in opportunity if r["spend"] > 0 and r["total_ltv"] > 0]
-    opp_avg_roas = (
-        sum(_state_roas(r) for r in opp_with_revenue) / len(opp_with_revenue)
-        if opp_with_revenue else 0.0
+    # Average ROAS of high-roas + untapped states — for reallocation projection
+    upside_states = [r for r in high_roas if r["spend"] > 0]
+    upside_avg_roas = (
+        sum(_state_roas(r) for r in upside_states) / len(upside_states)
+        if upside_states else 0.0
     )
-    potential_revenue = wasted_spend * opp_avg_roas if opp_avg_roas > 0 else 0
+    potential_revenue = recoverable * upside_avg_roas if upside_avg_roas > 0 else 0
 
-    # ── Build a single flowing summary ────────────────────────────────────────
-    parts: list[str] = []
+    # ── Inclusion / exclusion lists (Meta-paste-friendly) ────────────────────
+    # Include = High ROAS + Untapped (scale these up)
+    # Exclude = No ROAS + Low ROAS (cut the bleed and the losses)
+    inclusion_rows = list(high_roas) + list(untapped)
+    exclusion_rows = list(no_roas) + list(low_roas)
 
-    # Opening sentence with the window-level snapshot
+    inclusion_names = [r["state_name"] for r in inclusion_rows if r["state_name"]]
+    exclusion_names = [r["state_name"] for r in exclusion_rows if r["state_name"]]
+    inclusion_codes = [r["state"] for r in inclusion_rows if r["state"]]
+    exclusion_codes = [r["state"] for r in exclusion_rows if r["state"]]
+    inclusion_csv = ", ".join(inclusion_names)
+    exclusion_csv = ", ".join(exclusion_names)
+
+    # ── Build the formatted summary ──────────────────────────────────────────
+    sections: list[str] = []
+
+    # Header line
     if total_spend > 0:
-        monthly_phrase = f" (~${avg_monthly_spend:,.0f}/month run rate)" if avg_monthly_spend > 0 else ""
-        opener = f"In the last {win}, you spent ${total_spend:,.0f} on US ads{monthly_phrase}"
+        rate_phrase = f"~${avg_monthly_spend:,.0f}/month" if avg_monthly_spend > 0 else ""
+        roas_phrase = ""
+        if total_ltv > 0 and ltv_roas:
+            roas_phrase = f" · {ltv_roas:.2f}× LTV ROAS"
+        elif account_roas:
+            roas_phrase = f" · {account_roas:.2f}× ROAS"
+        header = f"LAST {win.upper()} · ${total_spend:,.0f} spent"
+        if rate_phrase:
+            header += f" · {rate_phrase}"
+        header += roas_phrase
+        sections.append(header)
         if total_ltv > 0:
-            opener += (
-                f" and your customers in these geographies represent ${total_ltv:,.0f} in lifetime value "
-                f"(blended {ltv_roas or 0:.2f}× LTV ROAS)."
+            sections.append(f"Customers in these geographies represent ${total_ltv:,.0f} in lifetime value.")
+
+    # HIGH ROAS — keep + scale up
+    if high_roas:
+        lines = ["★ HIGH ROAS — scale these up (consider 15-25% budget increases):"]
+        for r in high_roas:
+            lines.append(
+                f"   • {r['state_name']} — ${r['spend']:,.0f} spent → ${r['total_ltv']:,.0f} LTV "
+                f"({_state_roas(r):.1f}× ROAS, {r['paying_contacts']} paying)"
             )
-        elif total_revenue_30d > 0:
-            opener += f" and generated ${total_revenue_30d:,.0f} in tracked revenue ({account_roas or 0:.2f}× ROAS)."
-        else:
-            opener += ". No revenue is matched back yet — connect Stripe or populate GHL LTV for full picture."
-        parts.append(opener)
+        if high_spend > 0:
+            lines.append(f"   → Total: ${high_ltv:,.0f} returned on ${high_spend:,.0f} spent")
+        sections.append("\n".join(lines))
 
-    # WHAT'S WORKING
-    if working:
-        ex = ", ".join(
-            f"{r['state_name']} (${r['spend']:,.0f} → ${r['total_ltv']:,.0f} LTV, {_state_roas(r):.1f}× ROAS)"
-            for r in working[:5]
-        )
-        parts.append(
-            f"What's working: {ex}. These geos are returning ${working_ltv:,.0f} in lifetime value on ${working_spend:,.0f} in spend. "
-            "Keep funding them and consider 15–25% daily budget increases — they've earned the room."
-        )
-
-    # WHAT'S NOT WORKING / WASTED SPEND
-    if wasted:
-        ex_parts = []
-        for r in wasted:
-            if r["paying_contacts"] == 0 and r["conversions"] == 0:
-                ex_parts.append(f"{r['state_name']} (${r['spend']:,.0f} → $0 LTV, no paying customers)")
-            else:
-                ex_parts.append(
-                    f"{r['state_name']} (${r['spend']:,.0f} → ${r['total_ltv']:,.0f} LTV, {_state_roas(r):.2f}× ROAS)"
-                )
-        parts.append(
-            f"What's not working — ${wasted_spend:,.0f} of wasted spend across {len(wasted)} states: {'; '.join(ex_parts)}. "
-            "Recovery: in Ads Manager, open each active ad set → Audiences → Locations → click Exclude and add these states. "
-            "This stops the bleed immediately without pausing campaigns. For borderline states (around 0.5× ROAS), "
-            "consider a separate $5–10/day test campaign before fully excluding — small data shouldn't kill a geo permanently."
-        )
-
-    # OPPORTUNITY + REALLOCATION
-    if opportunity:
-        ex_parts = []
-        for r in opportunity[:5]:
-            roas = _state_roas(r)
-            if r["spend"] > 0:
-                ex_parts.append(
-                    f"{r['state_name']} (${r['spend']:,.0f} spent → ${r['total_ltv']:,.0f} LTV, {roas:.1f}× ROAS)"
-                )
-            else:
-                ex_parts.append(
-                    f"{r['state_name']} (${r['total_ltv']:,.0f} historical LTV, minimal current spend)"
-                )
-
-        opp_text = (
-            f"Where to put it instead: {'; '.join(ex_parts)}. "
-            "Build a state-targeted prospecting campaign (Sales objective, single ad set per state cluster) "
-            "and seed a Lookalike-1% audience using your high-LTV customers from these geos."
-        )
-
-        if wasted_spend > 0 and opp_avg_roas > 0:
-            opp_text += (
-                f" If you redirect the ${wasted_spend:,.0f} currently being wasted into these states "
-                f"at their current average ROAS ({opp_avg_roas:.1f}×), you'd project roughly "
-                f"${potential_revenue:,.0f} in additional revenue — that's the size of the opportunity sitting on the table."
+    # MEDIUM ROAS — hold steady
+    if medium_roas:
+        lines = ["~ MEDIUM ROAS — profitable, hold steady (don't change budgets unless data improves):"]
+        for r in medium_roas:
+            lines.append(
+                f"   • {r['state_name']} — ${r['spend']:,.0f} → ${r['total_ltv']:,.0f} LTV ({_state_roas(r):.1f}× ROAS)"
             )
+        sections.append("\n".join(lines))
 
-        parts.append(opp_text)
+    # LOW ROAS — losing money
+    if low_roas:
+        lines = [f"▼ LOW ROAS — losing money (${low_roas_spend:,.0f} at <1× return, consider excluding):"]
+        for r in low_roas:
+            lines.append(
+                f"   • {r['state_name']} — ${r['spend']:,.0f} → ${r['total_ltv']:,.0f} LTV ({_state_roas(r):.2f}× ROAS)"
+            )
+        sections.append("\n".join(lines))
 
-    # If nothing meaningful surfaced
-    if not working and not wasted and not opportunity:
-        parts.append(
+    # NO ROAS — silent drain (this is what the user called "silent bleed" — keep this category)
+    if no_roas:
+        no_roas_names = ", ".join(r["state_name"] for r in no_roas)
+        sections.append(
+            f"✗ NO ROAS — zero return on spend ({len(no_roas)} states, ${no_roas_spend:,.0f} total):\n"
+            f"   {no_roas_names}\n"
+            "   → Cut these. Add to Ad Set → Locations → Exclude."
+        )
+
+    # UNTAPPED — historical customers, no current ads
+    if untapped:
+        lines = ["◇ UNTAPPED — existing customers here, no current ad spend:"]
+        for r in untapped[:8]:
+            lines.append(
+                f"   • {r['state_name']} — ${r['total_ltv']:,.0f} historical LTV, only ${r['spend']:,.0f} spent"
+            )
+        lines.append("   → Build a state-targeted prospecting campaign + Lookalike-1% from your top-LTV customers here.")
+        sections.append("\n".join(lines))
+
+    # REALLOCATION PROJECTION
+    if recoverable > 0 and upside_avg_roas > 0:
+        sections.append(
+            f"⇄ REALLOCATION: cutting the ${recoverable:,.0f} of Low+No ROAS spend and redirecting it to "
+            f"High ROAS geos (avg {upside_avg_roas:.1f}× ROAS) projects ~${potential_revenue:,.0f} in additional revenue."
+        )
+
+    if not sections:
+        sections.append(
             f"Nothing classifies cleanly yet in this {win} window — spend is either too small, too spread out, "
-            "or revenue tracking is incomplete. Try widening the time window or running transaction sync to recover unmatched payments."
+            "or revenue tracking is incomplete. Try widening the time window or running transaction sync."
         )
 
-    return {"summary": " ".join(parts)}
+    return {
+        "summary": "\n\n".join(sections),
+        "inclusion_states": inclusion_codes,
+        "inclusion_state_names": inclusion_names,
+        "inclusion_csv": inclusion_csv,
+        "exclusion_states": exclusion_codes,
+        "exclusion_state_names": exclusion_names,
+        "exclusion_csv": exclusion_csv,
+        "tier_totals": {
+            "high_spend": round(high_spend, 2),
+            "high_ltv": round(high_ltv, 2),
+            "high_count": len(high_roas),
+            "medium_count": len(medium_roas),
+            "low_spend": round(low_roas_spend, 2),
+            "low_count": len(low_roas),
+            "no_roas_spend": round(no_roas_spend, 2),
+            "no_roas_count": len(no_roas),
+            "untapped_count": len(untapped),
+        },
+        "reallocation": {
+            "recoverable_spend": round(recoverable, 2),
+            "upside_avg_roas": round(upside_avg_roas, 2),
+            "projected_revenue_gain": round(potential_revenue, 2),
+        },
+    }
