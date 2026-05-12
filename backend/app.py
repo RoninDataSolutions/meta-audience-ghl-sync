@@ -63,6 +63,7 @@ from routes.email_routes import router as email_router
 from routers.accounts import router as accounts_router
 from routers.audit import router as audit_router
 from routers.conversions import router as conversions_router
+from routers.heatmap import router as heatmap_router
 
 app.include_router(config_router, prefix="/api")
 app.include_router(sync_router, prefix="/api")
@@ -70,6 +71,7 @@ app.include_router(email_router, prefix="/api")
 app.include_router(accounts_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 app.include_router(conversions_router, prefix="/api")
+app.include_router(heatmap_router, prefix="/api")
 
 # Serve frontend static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")

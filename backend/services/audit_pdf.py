@@ -872,6 +872,108 @@ def _page_demographics(raw_metrics: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Geographic Breakdown (US states, 30d)
+# ---------------------------------------------------------------------------
+def _page_geographic(raw_metrics: dict) -> list:
+    story = []
+    story += section_header("PERFORMANCE BY US STATE")
+
+    geo = None
+    try:
+        geo = raw_metrics.get("business_context", {}).get("geographic_breakdown")
+    except (KeyError, TypeError, AttributeError):
+        geo = None
+
+    if not geo or not geo.get("states"):
+        story.append(_p("No geographic breakdown available. Requires GHL contacts with state data and Meta US-region insights.", "gray"))
+        story.append(PageBreak())
+        return story
+
+    states = geo["states"]
+    summary = geo.get("summary", {})
+
+    # Summary line
+    avg_cpa = summary.get("account_avg_cpa")
+    summary_text = (
+        f"30d spend across {summary.get('states_with_spend', 0)} states · "
+        f"{summary.get('states_with_contacts', 0)} states with GHL contacts · "
+        f"{summary.get('states_with_conversions', 0)} states with matched conversions"
+    )
+    if avg_cpa:
+        summary_text += f" · account avg CPA ${avg_cpa:,.2f}"
+    story.append(_p(summary_text, "gray"))
+    story.append(Spacer(1, 8))
+
+    # Top wasted / opportunity callouts as side-by-side cards
+    wasted = summary.get("wasted", [])
+    opportunity = summary.get("opportunity", [])
+
+    if wasted or opportunity:
+        if wasted:
+            story.append(_p("<b>Wasted spend (high spend, low conversion):</b>", "body"))
+            for w in wasted:
+                line = (
+                    f"&nbsp;&nbsp;• {w['state_name']} ({w['state']}): "
+                    f"${w['spend']:,.0f} spent → {w['conversions']} conversion(s)"
+                )
+                if w.get("cpa"):
+                    line += f", CPA ${w['cpa']:,.0f}"
+                story.append(_p(line, "body"))
+            story.append(Spacer(1, 6))
+
+        if opportunity:
+            story.append(_p("<b>Underspent opportunities (low spend, high conversion rate):</b>", "body"))
+            for o in opportunity:
+                line = (
+                    f"&nbsp;&nbsp;• {o['state_name']} ({o['state']}): "
+                    f"${o['spend']:,.0f} spent → {o['conversions']} conversion(s), "
+                    f"{o['conversion_rate_pct']}% conv rate"
+                )
+                story.append(_p(line, "body"))
+            story.append(Spacer(1, 8))
+
+    # Top-N table — show top 20 by spend
+    top_states = states[:20]
+
+    headers = ["State", "Spend", "Impr", "Clicks", "Contacts", "Conv", "Rev", "CPA", "Class"]
+    col_w = [
+        0.95 * inch,  # state
+        0.75 * inch,  # spend
+        0.70 * inch,  # impressions
+        0.65 * inch,  # clicks
+        0.70 * inch,  # contacts
+        0.55 * inch,  # conv
+        0.70 * inch,  # revenue
+        0.70 * inch,  # cpa
+        0.80 * inch,  # classification
+    ]
+
+    rows = []
+    class_label = {
+        "wasted": "Wasted",
+        "opportunity": "Opportunity",
+        "working": "Working",
+    }
+    for s in top_states:
+        cls = class_label.get(s.get("classification") or "", "—")
+        rows.append([
+            _p(f"{s['state_name'] or '—'} ({s['state']})", "cell"),
+            _p(_money(s.get("spend")), "cell_num"),
+            _p(_num(s.get("impressions")), "cell_num"),
+            _p(_num(s.get("clicks")), "cell_num"),
+            _p(_num(s.get("contacts")), "cell_num"),
+            _p(_num(s.get("conversions")), "cell_num"),
+            _p(_money(s.get("revenue")), "cell_num"),
+            _p(_money(s.get("cpa")), "cell_num"),
+            _p(cls, "cell"),
+        ])
+
+    story.append(make_table(headers, rows, col_w))
+    story.append(PageBreak())
+    return story
+
+
+# ---------------------------------------------------------------------------
 # AI Analysis — full detail
 # ---------------------------------------------------------------------------
 def _render_analysis_section(analysis: dict) -> list:
@@ -1416,7 +1518,7 @@ def generate_pdf(
     # Pages 3+ — Data tables
     if raw_metrics:
         for fn in [_page_campaigns, _page_adsets, _page_ads,
-                   _page_placements, _page_demographics]:
+                   _page_placements, _page_demographics, _page_geographic]:
             try:
                 story += fn(raw_metrics)
             except Exception:

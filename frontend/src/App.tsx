@@ -11,8 +11,9 @@ import EmailSettings from "./components/EmailSettings";
 import AuditPage from "./pages/AuditPage";
 import AccountsPage from "./pages/AccountsPage";
 import ConversionsPage from "./pages/ConversionsPage";
+import HeatMapPage from "./pages/HeatMapPage";
 
-type Tab = "sync" | "audit" | "conversions" | "accounts";
+type Tab = "sync" | "audit" | "heatmap" | "conversions" | "accounts";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("sync");
@@ -128,13 +129,17 @@ export default function App() {
       />
 
       <nav className="tab-nav">
-        {(["sync", "audit", "conversions", "accounts"] as Tab[]).map((tab) => (
+        {(["sync", "audit", "heatmap", "conversions", "accounts"] as Tab[]).map((tab) => (
           <button
             key={tab}
             className={`tab-btn${activeTab === tab ? " tab-btn--active" : ""}`}
             onClick={() => setActiveTab(tab)}
           >
-            {tab === "sync" ? "Sync" : tab === "audit" ? "Audit" : tab === "conversions" ? "Conversions" : "Accounts"}
+            {tab === "sync" ? "Sync"
+              : tab === "audit" ? "Audit"
+              : tab === "heatmap" ? "Heat Map"
+              : tab === "conversions" ? "Conversions"
+              : "Accounts"}
           </button>
         ))}
       </nav>
@@ -165,6 +170,7 @@ export default function App() {
       )}
 
       {activeTab === "audit" && <AuditPage selectedAccount={selectedAccount} />}
+      {activeTab === "heatmap" && <HeatMapPage selectedAccount={selectedAccount} />}
       {activeTab === "conversions" && <ConversionsPage selectedAccount={selectedAccount} />}
       {activeTab === "accounts" && <AccountsPage onAccountsChanged={() => getAccounts().then((d) => setAccounts(d.accounts))} />}
 

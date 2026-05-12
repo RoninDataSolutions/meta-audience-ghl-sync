@@ -227,3 +227,22 @@ export async function getConversionDetail(id: number): Promise<Conversion> {
 export async function retryConversion(id: number): Promise<{ status: string; id: number }> {
   return request(`/api/conversions/${id}/retry`, { method: "POST" });
 }
+
+// ── Heat Map ─────────────────────────────────────────────────────────────────
+
+export async function generateHeatmap(
+  accountId?: string,
+  days: number = 30,
+): Promise<{
+  account_id: string;
+  days: number;
+  since: string;
+  until: string;
+  generated_at: string;
+  geographic_breakdown: any;
+}> {
+  const qs = new URLSearchParams();
+  if (accountId) qs.set("account_id", accountId);
+  qs.set("days", String(days));
+  return request(`/api/heatmap/generate?${qs}`, { method: "POST" });
+}

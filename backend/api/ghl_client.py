@@ -84,6 +84,70 @@ async def get_custom_fields(creds: "AccountCredentials | None" = None) -> list[d
         return fields
 
 
+async def get_contact_detail(
+    contact_id: str,
+    creds: "AccountCredentials | None" = None,
+) -> dict | None:
+    """
+    Fetch a single contact's full record, including address1, city, state, postalCode.
+    Returns None on 404. Raises on other failures.
+    The list endpoint omits address fields — only this endpoint returns them.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await _request_with_retry(
+            client, "GET",
+            f"{BASE_URL}/contacts/{contact_id}",
+            headers=_headers(creds),
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        # GHL returns {"contact": {...}}; unwrap if needed
+        return data.get("contact") if isinstance(data, dict) and "contact" in data else data
+
+
+async def enrich_contacts_with_address(
+    contacts: list[dict],
+    creds: "AccountCredentials | None" = None,
+    concurrency: int = 10,
+) -> list[dict]:
+    """
+    For each contact in the input list, fetch its detail record and merge
+    address fields (state, city, postalCode, address1) back onto the contact.
+    Returns the enriched list (same order, same length).
+
+    Use this *after* filtering to a small set (e.g. paying customers) — running
+    against 700+ contacts will take ~70s.
+    """
+    if not contacts:
+        return contacts
+
+    semaphore = asyncio.Semaphore(concurrency)
+    ADDR_FIELDS = ("address1", "city", "state", "postalCode", "country")
+
+    async def fetch_one(c: dict) -> dict:
+        cid = c.get("id")
+        if not cid:
+            return c
+        async with semaphore:
+            try:
+                detail = await get_contact_detail(cid, creds=creds)
+            except Exception as e:
+                logger.warning(f"Detail fetch failed for {cid}: {e}")
+                return c
+        if not detail:
+            return c
+        # Merge only fields the list endpoint didn't already populate
+        for f in ADDR_FIELDS:
+            if not c.get(f) and detail.get(f):
+                c[f] = detail[f]
+        return c
+
+    results = await asyncio.gather(*[fetch_one(c) for c in contacts])
+    return list(results)
+
+
 async def get_all_contacts(creds: "AccountCredentials | None" = None) -> list[dict]:
     """Fetch all contacts from the location using cursor-based pagination."""
     loc = _location_id(creds)

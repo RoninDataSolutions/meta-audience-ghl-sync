@@ -96,6 +96,7 @@ The payload may contain a "business_context" key with the following enrichment d
 - "competitor_ads": active ads from competitor pages. Note format, messaging, and creative patterns the competition is using. Identify gaps or opportunities.
 - "conversation_insights": patterns extracted from real pre-sale Instagram DM and WhatsApp conversations (last 60 days). Contains top_questions prospects ask, top_objections, conversion_signals that indicate readiness to book, and messaging_gaps where ad messaging doesn't match what prospects actually need to know before converting. This is ground-truth prospect voice data — treat it as highly authoritative. Use it to evaluate whether ad copy addresses real concerns, recommend specific CTA and messaging changes, and identify friction in the pre-sale funnel. If ads promise something prospects never ask about but do ask about pricing or schedule, that's a messaging alignment problem.
 - "ltv_insights": customer lifetime value from the CRM. Contains median/avg LTV, distribution (p25/p75), and cohort_trend showing how LTV changes month-over-month for customers acquired in different periods. Since ~100% of customers come from Meta, this IS Meta acquisition quality. Use it to: calibrate CPA targets (if median LTV is $400, a $60 CPA is a 6.7x return — factor this into whether CPA is actually good or bad), flag if recent cohorts show declining LTV even if CPA looks stable (acquiring cheaper but lower-quality customers), and note the trend direction in your projections.
+- "geographic_breakdown": US state-level overlay of Meta ad spend, GHL contact distribution, and matched-conversion revenue (30-day window). Contains "states" (per-state rows with spend, impressions, clicks, contacts, conversions, revenue, cpa, conversion_rate_pct, and a classification tag of "wasted" | "opportunity" | "working") and "summary" (top wasted/opportunity/working states). This is the single most actionable geographic signal you have. Use it to call out specifically: (1) WASTED GEOS — states with high spend but low/zero conversions (e.g., "$2,340 spent in New York → 2 conversions, CPA $1,170 = 15× account avg, exclude or reduce"), (2) UNDERSPENT OPPORTUNITIES — states converting well but receiving little budget (e.g., "Texas converting at 27% — 4× California's rate — but only 18% of budget; expand"), (3) WORKING GEOS — states where high spend correlates with strong conversion (validate, don't touch). Always tie recommendations to the business profile — e.g., if it's a local service, the geographic spread tells you whether targeting is leaking budget outside the service area; if it's a national DTC brand, geographic concentration tells you where the brand actually resonates. Cite specific state names, dollar amounts, and conversion counts. Where appropriate, propose state-level exclusions or geo-targeted campaigns in action_plan.
 
 When business_context is present, integrate it throughout your analysis — don't summarize it separately. Cite actual prices, CTAs, page follower counts, competitor observations, and business model specifics inline. The business_notes and report_context fields in particular should visibly shape your campaign recommendations, CPA benchmarks, audience strategy, and projections.
 
@@ -1219,10 +1220,12 @@ async def fetch_conversation_insights(
 async def fetch_ltv_insights(
     days_back: int = 180,
     creds: "AccountCredentials | None" = None,
+    contacts: list[dict] | None = None,
 ) -> dict:
     """
     Pull contacts with LTV populated from GHL and compute distribution + cohort trends.
     Since ~100% of contacts come from Meta, this is effectively Meta customer LTV.
+    If `contacts` is provided, skips the re-fetch.
     """
     ghl_ok = creds.has_ghl() if creds else (bool(settings.GHL_API_KEY) and bool(settings.GHL_LOCATION_ID))
     if not ghl_ok:
@@ -1243,10 +1246,11 @@ async def fetch_ltv_insights(
     except Exception as e:
         return {"error": f"Could not fetch custom fields: {e}"}
 
-    try:
-        contacts = await get_all_contacts(creds=creds)
-    except Exception as e:
-        return {"error": f"Could not fetch contacts: {e}"}
+    if contacts is None:
+        try:
+            contacts = await get_all_contacts(creds=creds)
+        except Exception as e:
+            return {"error": f"Could not fetch contacts: {e}"}
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
     ltv_data: list[tuple[datetime, float]] = []
@@ -1332,6 +1336,7 @@ async def build_audit_payload(
     business_notes: str | None = None,
     report_notes: str | None = None,
     creds: "AccountCredentials | None" = None,
+    db: Any = None,
 ) -> dict:
     """Fetch all Meta data and return the structured audit payload."""
 
@@ -1493,11 +1498,29 @@ async def build_audit_payload(
 
     # GHL enrichment — always run when GHL is configured
     ghl_ok = creds.has_ghl() if creds else (bool(settings.GHL_API_KEY) and bool(settings.GHL_LOCATION_ID))
+    ghl_contacts: list[dict] = []
     if ghl_ok:
+        # Fetch contacts once and feed both LTV and geographic enrichments
+        try:
+            from api.ghl_client import get_all_contacts
+            ghl_contacts = await get_all_contacts(creds=creds)
+        except Exception as e:
+            logger.warning(f"Could not pre-fetch GHL contacts for enrichment: {e}")
+            ghl_contacts = []
+
         enrichment_tasks.append(fetch_conversation_insights(days=60, creds=creds))
         enrichment_labels.append("conversation_insights")
-        enrichment_tasks.append(fetch_ltv_insights(days_back=180, creds=creds))
+        enrichment_tasks.append(fetch_ltv_insights(days_back=180, creds=creds, contacts=ghl_contacts))
         enrichment_labels.append("ltv_insights")
+
+        # Geographic breakdown (US states) — requires db for conversion join
+        if db is not None and ghl_contacts:
+            from services.geographic_breakdown import build_geographic_breakdown
+            enrichment_tasks.append(build_geographic_breakdown(
+                account_id, token, since_30d, until_30d,
+                contacts=ghl_contacts, db=db, creds=creds,
+            ))
+            enrichment_labels.append("geographic_breakdown")
 
     if enrichment_tasks:
         enrichment_results = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
@@ -1565,6 +1588,7 @@ async def run_audit(
             business_notes=business_notes,
             report_notes=report_notes,
             creds=creds,
+            db=db,
         )
 
         # 2. Serialize payload
