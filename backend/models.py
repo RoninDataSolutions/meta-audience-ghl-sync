@@ -251,3 +251,38 @@ class ContactIdentityMap(Base):
         UniqueConstraint("stripe_customer_id", "ghl_contact_id", name="uq_cim_customer_ghl"),
         UniqueConstraint("stripe_email", "ghl_contact_id", name="uq_cim_email_ghl"),
     )
+
+
+class HeatmapSnapshot(Base):
+    """
+    A point-in-time snapshot of the Geo ROAS heat map for a given account
+    and time window. Stores the full geographic_breakdown payload so we can:
+      - Re-render the dashboard without re-fetching from Meta/Stripe/GHL
+      - Compare two snapshots later (delta in ROAS by state, etc.)
+      - Audit / archive each generation
+    """
+    __tablename__ = "heatmap_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String(50), nullable=False, index=True)
+    account_name = Column(String(255), nullable=True)
+    generated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    days_back = Column(Integer, nullable=False)
+    since = Column(String(20), nullable=True)
+    until = Column(String(20), nullable=True)
+
+    # Source of generation: 'api', 'pdf', 'audit'
+    source = Column(String(20), nullable=False, default="api")
+
+    # Full geographic_breakdown payload (states + narrative + summary + tier_totals + reallocation)
+    geographic_breakdown = Column(JSON, nullable=False)
+
+    # Denormalized summary columns for cheap listing/filtering without unpacking JSON
+    total_spend = Column(Numeric(12, 2), nullable=True)
+    total_ltv = Column(Numeric(12, 2), nullable=True)
+    ltv_roas = Column(Numeric(8, 4), nullable=True)
+    projected_revenue_gain = Column(Numeric(12, 2), nullable=True)
+    states_with_spend = Column(Integer, nullable=True)
+    states_with_paying = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

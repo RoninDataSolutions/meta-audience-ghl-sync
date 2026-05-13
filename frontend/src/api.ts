@@ -239,10 +239,57 @@ export async function generateHeatmap(
   since: string;
   until: string;
   generated_at: string;
+  snapshot_id?: number | null;
   geographic_breakdown: any;
 }> {
   const qs = new URLSearchParams();
   if (accountId) qs.set("account_id", accountId);
   qs.set("days", String(days));
   return request(`/api/heatmap/generate?${qs}`, { method: "POST" });
+}
+
+export interface HeatmapSnapshotSummary {
+  id: number;
+  account_id: string;
+  account_name: string | null;
+  generated_at: string | null;
+  days_back: number;
+  since: string | null;
+  until: string | null;
+  source: string;
+  total_spend: number | null;
+  total_ltv: number | null;
+  ltv_roas: number | null;
+  projected_revenue_gain: number | null;
+  states_with_spend: number | null;
+  states_with_paying: number | null;
+}
+
+export interface HeatmapSnapshotDetail extends HeatmapSnapshotSummary {
+  geographic_breakdown: any;
+}
+
+export async function listHeatmapSnapshots(params?: {
+  account_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{
+  total: number;
+  limit: number;
+  offset: number;
+  snapshots: HeatmapSnapshotSummary[];
+}> {
+  const qs = new URLSearchParams();
+  if (params?.account_id) qs.set("account_id", params.account_id);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  return request(`/api/heatmap/snapshots?${qs}`);
+}
+
+export async function getHeatmapSnapshot(id: number): Promise<HeatmapSnapshotDetail> {
+  return request(`/api/heatmap/snapshots/${id}`);
+}
+
+export async function deleteHeatmapSnapshot(id: number): Promise<{ status: string; id: number }> {
+  return request(`/api/heatmap/snapshots/${id}`, { method: "DELETE" });
 }

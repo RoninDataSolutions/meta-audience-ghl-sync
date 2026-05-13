@@ -1,6 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { AdAccount } from "../types";
-import { getAuditReports, getAuditReport, generateHeatmap } from "../api";
+import {
+  getAuditReports,
+  getAuditReport,
+  generateHeatmap,
+  listHeatmapSnapshots,
+  getHeatmapSnapshot,
+  deleteHeatmapSnapshot,
+  type HeatmapSnapshotSummary,
+} from "../api";
 import GeographicHeatmap from "../components/GeographicHeatmap";
 
 interface Props {
@@ -8,9 +16,10 @@ interface Props {
 }
 
 interface DataSource {
-  type: "audit" | "fresh";
+  type: "audit" | "fresh" | "snapshot";
   generatedAt: string | null;
   reportId?: number;
+  snapshotId?: number;
   days: number;
 }
 
@@ -24,6 +33,30 @@ export default function HeatMapPage({ selectedAccount }: Props) {
   const [source, setSource] = useState<DataSource | null>(null);
   const [days, setDays] = useState<number>(30);
   const [customDays, setCustomDays] = useState<string>("");
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState<HeatmapSnapshotSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+
+  const refreshHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const res = await listHeatmapSnapshots({
+        account_id: selectedAccount?.account_id,
+        limit: 50,
+      });
+      setHistory(res.snapshots);
+    } catch (e: any) {
+      setHistoryError(e.message || "Failed to load history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [selectedAccount?.account_id]);
+
+  useEffect(() => {
+    if (showHistory) refreshHistory();
+  }, [showHistory, refreshHistory]);
 
   // Load the most recent audit's geographic data on mount / account change
   useEffect(() => {
@@ -77,11 +110,50 @@ export default function HeatMapPage({ selectedAccount }: Props) {
       const result = await generateHeatmap(selectedAccount?.account_id, windowDays);
       setGeoData(result.geographic_breakdown);
       setDays(result.days);
-      setSource({ type: "fresh", generatedAt: result.generated_at, days: result.days });
+      setSource({
+        type: "fresh",
+        generatedAt: result.generated_at,
+        days: result.days,
+        snapshotId: result.snapshot_id ?? undefined,
+      });
+      if (showHistory) refreshHistory();
     } catch (e: any) {
       setError(e.message || "Heat map generation failed");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleLoadSnapshot = async (id: number) => {
+    setGenerating(true);
+    setError("");
+    try {
+      const snap = await getHeatmapSnapshot(id);
+      setGeoData(snap.geographic_breakdown);
+      setDays(snap.days_back);
+      setSource({
+        type: "snapshot",
+        generatedAt: snap.generated_at,
+        days: snap.days_back,
+        snapshotId: snap.id,
+      });
+    } catch (e: any) {
+      setError(e.message || "Failed to load snapshot");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleDeleteSnapshot = async (id: number) => {
+    if (!confirm(`Delete snapshot #${id}? This cannot be undone.`)) return;
+    try {
+      await deleteHeatmapSnapshot(id);
+      setHistory((prev) => prev.filter((s) => s.id !== id));
+      if (source?.snapshotId === id) {
+        setSource((prev) => (prev ? { ...prev, snapshotId: undefined } : prev));
+      }
+    } catch (e: any) {
+      setHistoryError(e.message || "Failed to delete snapshot");
     }
   };
 
@@ -195,7 +267,9 @@ export default function HeatMapPage({ selectedAccount }: Props) {
               <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
                 {source.type === "audit"
                   ? `From audit #${source.reportId} · ${windowLabel(source.days)} window · ${source.generatedAt ? new Date(source.generatedAt).toLocaleString() : "—"}`
-                  : `Freshly generated · ${windowLabel(source.days)} window · ${source.generatedAt ? new Date(source.generatedAt).toLocaleString() : "—"}`}
+                  : source.type === "snapshot"
+                  ? `Snapshot #${source.snapshotId} · ${windowLabel(source.days)} window · ${source.generatedAt ? new Date(source.generatedAt).toLocaleString() : "—"}`
+                  : `Freshly generated · ${windowLabel(source.days)} window · ${source.generatedAt ? new Date(source.generatedAt).toLocaleString() : "—"}${source.snapshotId ? ` · saved as #${source.snapshotId}` : ""}`}
               </div>
             )}
           </div>
@@ -254,14 +328,19 @@ export default function HeatMapPage({ selectedAccount }: Props) {
             Apply
           </button>
           <div style={{ flex: 1 }} />
-          <button
+          <a
             className="btn btn-sm"
-            onClick={() => window.print()}
-            disabled={!geoData?.states?.length}
-            title="Print or save the full dashboard as PDF (all tabs render sequentially in print)"
+            href={`/api/heatmap/pdf?${new URLSearchParams({
+              ...(selectedAccount?.account_id ? { account_id: selectedAccount.account_id } : {}),
+              days: String(source?.days ?? days),
+            }).toString()}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={geoData?.states?.length ? {} : { pointerEvents: "none", opacity: 0.4 }}
+            title="Download a structured PDF report (cover + map + tiers + actions + appendix)"
           >
             ⎙ Export PDF
-          </button>
+          </a>
           <button
             className="btn btn-sm"
             onClick={handleExportCSV}
@@ -269,6 +348,17 @@ export default function HeatMapPage({ selectedAccount }: Props) {
             title="Download CSV report (summary + per-state table + plain-English narrative)"
           >
             ⬇ Export CSV
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={() => setShowHistory((v) => !v)}
+            title="Show stored heat map snapshots"
+            style={{
+              background: showHistory ? "var(--primary, #3b82f6)" : "transparent",
+              color: showHistory ? "white" : "var(--text)",
+            }}
+          >
+            🕓 History
           </button>
           <button
             className="btn btn-primary"
@@ -279,6 +369,105 @@ export default function HeatMapPage({ selectedAccount }: Props) {
             {generating ? "Generating…" : "↻ Generate"}
           </button>
         </div>
+
+        {showHistory && (
+          <div style={{
+            marginBottom: "1rem",
+            padding: "0.75rem 1rem",
+            background: "rgba(255,255,255,0.02)",
+            border: "1px solid var(--border, rgba(255,255,255,0.08))",
+            borderRadius: "8px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+              <h3 style={{ margin: 0, fontSize: "0.95rem" }}>
+                Snapshot History {history.length > 0 && <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>· {history.length}</span>}
+              </h3>
+              <button className="btn btn-sm" onClick={refreshHistory} disabled={historyLoading}>
+                {historyLoading ? "Loading…" : "↻ Refresh"}
+              </button>
+            </div>
+            {historyError && (
+              <div style={{ padding: "0.5rem 0.75rem", background: "rgba(217,119,6,0.12)", border: "1px solid rgba(217,119,6,0.35)", borderRadius: "6px", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+                {historyError}
+              </div>
+            )}
+            {!historyLoading && history.length === 0 && !historyError && (
+              <div style={{ padding: "0.5rem", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+                No stored snapshots yet. Generate a heat map to create one.
+              </div>
+            )}
+            {history.length > 0 && (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border)" }}>
+                      <th style={{ padding: "0.4rem 0.5rem" }}>#</th>
+                      <th style={{ padding: "0.4rem 0.5rem" }}>Generated</th>
+                      <th style={{ padding: "0.4rem 0.5rem" }}>Account</th>
+                      <th style={{ padding: "0.4rem 0.5rem" }}>Window</th>
+                      <th style={{ padding: "0.4rem 0.5rem" }}>Source</th>
+                      <th style={{ padding: "0.4rem 0.5rem", textAlign: "right" }}>Spend</th>
+                      <th style={{ padding: "0.4rem 0.5rem", textAlign: "right" }}>LTV</th>
+                      <th style={{ padding: "0.4rem 0.5rem", textAlign: "right" }}>ROAS</th>
+                      <th style={{ padding: "0.4rem 0.5rem", textAlign: "right" }}>States</th>
+                      <th style={{ padding: "0.4rem 0.5rem", textAlign: "right" }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((s) => {
+                      const isCurrent = source?.snapshotId === s.id;
+                      return (
+                        <tr key={s.id} style={{
+                          borderBottom: "1px solid var(--border, rgba(255,255,255,0.05))",
+                          background: isCurrent ? "rgba(59,130,246,0.08)" : "transparent",
+                        }}>
+                          <td style={{ padding: "0.4rem 0.5rem", fontFamily: "var(--font-mono, monospace)" }}>{s.id}</td>
+                          <td style={{ padding: "0.4rem 0.5rem" }}>
+                            {s.generated_at ? new Date(s.generated_at).toLocaleString() : "—"}
+                          </td>
+                          <td style={{ padding: "0.4rem 0.5rem" }}>{s.account_name || s.account_id}</td>
+                          <td style={{ padding: "0.4rem 0.5rem" }}>{windowLabel(s.days_back)}</td>
+                          <td style={{ padding: "0.4rem 0.5rem", color: "var(--text-muted)" }}>{s.source}</td>
+                          <td style={{ padding: "0.4rem 0.5rem", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                            {s.total_spend != null ? `$${s.total_spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
+                          </td>
+                          <td style={{ padding: "0.4rem 0.5rem", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                            {s.total_ltv != null ? `$${s.total_ltv.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"}
+                          </td>
+                          <td style={{ padding: "0.4rem 0.5rem", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                            {s.ltv_roas != null ? `${s.ltv_roas.toFixed(2)}x` : "—"}
+                          </td>
+                          <td style={{ padding: "0.4rem 0.5rem", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                            {s.states_with_paying ?? 0}/{s.states_with_spend ?? 0}
+                          </td>
+                          <td style={{ padding: "0.4rem 0.5rem", textAlign: "right", whiteSpace: "nowrap" }}>
+                            <button
+                              className="btn btn-sm"
+                              onClick={() => handleLoadSnapshot(s.id)}
+                              disabled={generating || isCurrent}
+                              title={isCurrent ? "Currently loaded" : "Load this snapshot"}
+                              style={{ marginRight: "0.25rem" }}
+                            >
+                              {isCurrent ? "Loaded" : "Load"}
+                            </button>
+                            <button
+                              className="btn btn-sm"
+                              onClick={() => handleDeleteSnapshot(s.id)}
+                              title="Delete this snapshot"
+                              style={{ color: "#ef4444" }}
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {loading && !geoData && (
           <div style={{ padding: "2rem", textAlign: "center", color: "var(--text-muted)" }}>
